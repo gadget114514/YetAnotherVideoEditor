@@ -29,7 +29,7 @@ namespace yave {
 class Track;
 struct LayerItem;
 
-enum class ClipType { Video, Audio, Subtitle, AiPlaceholder, Image, Color };
+enum class ClipType { Video, Audio, Subtitle, AiPlaceholder, Image, Color, Cut };
 
 /// タイムライン上に置かれる編集単位の基底クラス。
 /// 派生: VideoClip / AudioClip / SubtitleClip / AiPlaceholderClip
@@ -151,7 +151,7 @@ private:
 
 namespace yave {
 
-enum class TrackType { Video, Audio, Subtitle, AiGenerated };
+enum class TrackType { Video, Audio, Subtitle, AiGenerated, Storyboard, Unknown };
 
 namespace plugin { class Vst3Host; }
 
@@ -213,9 +213,40 @@ public:
     QString defaultStylePresetId() const { return defaultStylePresetId_; }
     void    setDefaultStylePresetId(const QString& id) { defaultStylePresetId_ = id; }
 
+    // --- 参加能力 (enum を直接比較しないこと) ---
+    /// 映像合成に参加するか。Video / Subtitle / AiGenerated(映像系) が true。
+    /// Audio / Storyboard / Unknown は false。Timeline::buildSnapshot がこれを見る。
+    bool participatesInComposite() const;
+    /// オーディオグラフに参加するか。
+    bool participatesInAudioGraph() const;
+
+    // --- AIトラック (絵コンテ) との関係。13章 ---
+    /// このトラックが担う出力役割。空文字なら手動作成の通常トラック。
+    /// "mainVideo" / "mainVideoB" / "overlay" / "narration" / "bgm" / "se" / "subtitle" / "mask"
+    QString aiRole() const { return aiRole_; }
+    void    setAiRole(const QString& r) { aiRole_ = r; }
+
+    /// このトラックを生成した絵コンテトラックの ID。null なら無関係。
+    /// 役割の解決はこの ID でスコープされるため、複数の絵コンテトラックが
+    /// 同じ出力トラックを取り合うことはない。
+    QUuid   storyboardTrackId() const { return storyboardTrackId_; }
+    void    setStoryboardTrackId(const QUuid& id) { storyboardTrackId_ = id; }
+
+    /// 役割ごとの既定パラメータ (カスケード第 2 段)。13.3.5
+    const QJsonObject& roleDefaultsPatch() const { return roleDefaults_; }
+    void  setRoleDefaultsPatch(QJsonObject o) { roleDefaults_ = std::move(o); }
+
+    // --- 永続化 (未知フィールドの保持) ---
+    /// Clip と同じ前方互換の仕組み。TrackType::Unknown のトラックは
+    /// ここに元の JSON を丸ごと保持し、保存時にそのまま書き戻す。9.11.2
+    const QJsonObject& unknownFields() const { return unknownFields_; }
+    void setUnknownFields(QJsonObject o) { unknownFields_ = std::move(o); }
+
     // ================= クリップ操作 =================
 
     /// 受け入れ可能なクリップ型かどうか。UI のドロップ判定に使う。
+    /// CutClip は Storyboard トラックだけが受け入れ、
+    /// Storyboard トラックは CutClip だけを受け入れる (唯一の排他的規則。13.3.1)。
     bool acceptsClip(const Clip& c) const;
 
     /// ソート順を保って挿入する。
@@ -285,6 +316,11 @@ private:
     double     pan_       = 0.0;
 
     QString    defaultStylePresetId_ = QStringLiteral("default");
+
+    QString     aiRole_;                 // 13章
+    QUuid       storyboardTrackId_;
+    QJsonObject roleDefaults_;
+    QJsonObject unknownFields_;
 
     std::vector<std::shared_ptr<Clip>> clips_;      // start 昇順
     std::vector<plugin::Vst3Host*>     effectChain_; // 所有はしない
@@ -1022,13 +1058,19 @@ private:
 
 ---
 
-## 11.9 ai/AiGenerationParams.h
+## 11.9 core/ai/AiGenerationParams.h
+
+> **配置**: 純データ型であり `yave_core` に属する (`src/core/ai/`)。
+> namespace は `yave::ai` のまま。`TimeRange` / `Rational` / Qt Core にしか依存しないため、
+> GPU 無しの CI で単体テストできる性質は保たれる。
+> オーケストレータ / プロバイダ / キャッシュ / タスクは `yave_ai` (`src/ai/`) に残る。
+> 経緯は [13.14.3](13-ai-track.md)。
 
 ```cpp
 #pragma once
 
-#include "../core/TimeRange.h"
-#include "../core/Rational.h"
+#include "../TimeRange.h"
+#include "../Rational.h"
 
 #include <QUuid>
 #include <QString>
@@ -1037,7 +1079,12 @@ private:
 #include <QPointF>
 
 #include <optional>
+#include <set>
 #include <vector>
+
+namespace yave {
+enum class OutputRole;      // core/CutClip.h
+}
 
 namespace yave::ai {
 
@@ -1049,8 +1096,15 @@ enum class GenerationKind
     Subtitle,        ///< 字幕 (書き起こし / スクリプト生成 / 翻訳)
     Mask,            ///< マスク画像シーケンス
     EffectMetadata,  ///< エフェクトパラメータ (自動カラーグレード等)
-    Image            ///< 静止画
+    Image,           ///< 静止画
+    Storyboard       ///< カット列そのもの (L1 プランニング)。メディアではなく JSON を生む。13.7
 };
+
+/// 生成物の用途。AnimaticPreview はタイムラインへコミットされない。13.8.4
+enum class GenerationPurpose { Commit, AnimaticPreview };
+
+/// L1 プランの尺を指定範囲へどう合わせるか。13.7.3
+enum class PlanFitMode { ScaleToFit, KeepModelDurations, TrimToRange };
 
 /// 動画生成のサブモード
 enum class VideoGenMode
@@ -1155,7 +1209,24 @@ struct AiGenerationParams
     bool                 maskTrackAcrossFrames = true;
     bool                 maskFeather = true;
 
+    // ---------------- Storyboard (L1 プランニング) ----------------
+    QString              storyboardRequest;          ///< ユーザーの自然言語要求
+    int                  targetCutCount = 0;         ///< 0 = モデルに委ねる
+    std::set<OutputRole> desiredRoles;               ///< 空 = モデルに委ねる
+    int                  planSchemaVersion = 1;      ///< 契約 JSON のバージョン
+    bool                 includeExistingCutsAsContext = false;
+    PlanFitMode          planFitMode = PlanFitMode::ScaleToFit;
+
+    // ---------------- AIトラックとの結び付き (13章) ----------------
+    /// カット由来のタスクかどうか。設定されている場合、配置は OutputBinding が決め、
+    /// targetTrackId / createNewTrack / replaceExistingClips は無視される (13.14.6)。
+    struct CutRef { QUuid cutClipId; QUuid bindingId; };
+    std::optional<CutRef> cutRef;
+    QUuid                 batchId;      ///< StoryboardBatchJob に属する場合
+    GenerationPurpose     purpose = GenerationPurpose::Commit;
+
     // ---------------- 出力の扱い ----------------
+    /// cutRef が設定されているときは無視される。単発生成用。
     bool replaceExistingClips = false;
     bool createNewTrack       = false;
 
@@ -1172,7 +1243,10 @@ struct AiGenerationParams
     ValidationResult validate() const;
 
     /// キャッシュキーの計算に使う正規化ハッシュ。
-    /// 配置先 (targetTrackId 等) は含めない。
+    /// 配置先と作業状態は含めない。除外集合は 13.14.5 に列挙してあり、
+    /// tst_cutclip.cpp が固定する。含め忘れると「承認しただけで再課金」が起きる。
+    ///   targetTrackId, createNewTrack, replaceExistingClips,
+    ///   cutRef, batchId, purpose
     QByteArray contentHash() const;
 };
 
@@ -1208,6 +1282,14 @@ namespace yave::ai {
 class ProviderRegistry;
 class GenerationCache;
 
+/// 実行レーン。プロバイダの ProviderCapability から導出する。
+/// 単一の QThreadPool にしない理由は 13.6.4 を参照。
+enum class ExecutionLane { LocalGpu, LocalCpu, Remote, Sidecar };
+
+/// QThreadPool::start(runnable, priority) に渡す優先度。
+/// 単発生成 (Interactive) がバッチ (Batch) の後ろで飢えないようにする。
+enum class TaskPriority { Batch = 0, Interactive = 1 };
+
 /// 非同期で各生成タスクを管理・実行するコアクラス。
 ///
 /// 責務:
@@ -1234,7 +1316,10 @@ public:
     /// タスクを投入する。
     /// 妥当性検証に失敗した場合は null QUuid を返し taskFailed を発火する。
     /// 成功時は即座にプレースホルダクリップが配置される (Undo 可能)。
-    QUuid submit(const AiGenerationParams& params);
+    /// ただし対象が TrackType::Storyboard のトラックの場合、プレースホルダは置かない
+    /// (CutClip 自身がプレースホルダである。13.9.3)。
+    QUuid submit(const AiGenerationParams& params,
+                 TaskPriority priority = TaskPriority::Interactive);
 
     /// 同一パラメータでの再生成。newSeed=true なら seed を振り直す。
     QUuid regenerate(const QUuid& taskId, bool newSeed);
@@ -1314,7 +1399,13 @@ private:
     ProviderRegistry*                              registry_   = nullptr;
     GenerationCache*                               cache_      = nullptr;
 
-    QThreadPool                                    pool_;
+    /// 実行レーン。単一プールにしない理由は 13.6.4 を参照。
+    ///   LocalGpu = 1                              (VRAM。大型動画モデルの同時実行を防ぐ)
+    ///   LocalCpu = max(1, idealThreadCount() / 2)
+    ///   Remote   = 6                              (エンドポイント毎に追加のトークンバケット)
+    ///   Sidecar  = 設定値。既定 1
+    std::array<QThreadPool, 4>                     lanes_;
+
     std::vector<std::unique_ptr<AiGenerationTask>> tasks_;
     bool                                           autoCommit_ = false;
     mutable QMutex                                 mutex_;
@@ -1381,7 +1472,7 @@ struct LoadResult
 class ProjectSerializer
 {
 public:
-    static constexpr int kCurrentSchemaVersion = 1;
+    static constexpr int kCurrentSchemaVersion = 2;   // 2: AIトラック (13 章)
 
     // ================= トップレベル =================
 
@@ -1533,6 +1624,9 @@ public:
         IdChangeGain     = 4,
         IdEditSubtitleText = 5,
         IdChangeEffectParam = 6,
+        IdEditCutSpec       = 7,   // 13.9
+        IdEditStoryBible    = 8,
+        IdSetCutStatus      = 9,
     };
 
     explicit UndoCommandBase(Project* project, const QString& text);
@@ -1566,7 +1660,408 @@ private:
 
 ---
 
-## 11.13 クラス間の所有関係まとめ
+## 11.13 core/CutClip.h
+
+AIトラック上の 1 区間 = 1 カットの演出指示。設計の背景は [13.3.2](13-ai-track.md)。
+
+```cpp
+#pragma once
+
+#include "Clip.h"
+#include "ai/AiGenerationParams.h"
+
+#include <QUuid>
+#include <QString>
+#include <QJsonObject>
+
+#include <vector>
+
+namespace yave {
+
+namespace subtitle { class SubtitleClip; }
+
+// ---------------- カットの状態 ----------------
+
+enum class CutStatus      { NotStarted, Rough, InReview, Approved };
+enum class ContinuityMode { None, FromBoardImage, FromPreviousEnd, FromCutId };
+
+// ---------------- 演出の語彙 ----------------
+
+enum class ShotSize    { Unspecified, ExtremeWide, Wide, Full, Medium, CloseUp, ExtremeCloseUp };
+enum class CameraAngle { Unspecified, EyeLevel, High, Low, BirdsEye, WormsEye, Dutch };
+enum class CameraMovement { Unspecified, Fixed, PanLeft, PanRight, TiltUp, TiltDown,
+                            Dolly, SlowPushIn, PullOut, Handheld, Crane, Follow };
+enum class TransitionKind { Cut, Dissolve, FadeToBlack, FadeFromBlack, Wipe, MatchCut };
+
+struct CameraWork
+{
+    ShotSize       size     = ShotSize::Unspecified;
+    CameraAngle    angle    = CameraAngle::Unspecified;
+    CameraMovement movement = CameraMovement::Unspecified;
+    QString        note;
+};
+
+/// 絵コンテの「画」。
+struct BoardImage
+{
+    enum class Origin { None, UserFile, Generated, TimelineFrame };
+    Origin  origin = Origin::None;
+    QUuid   assetId;
+    QUuid   sourceTrackId;
+    int64_t sourceFrame = 0;
+    QUuid   generatedByTaskId;
+};
+
+struct Continuity
+{
+    ContinuityMode mode       = ContinuityMode::FromBoardImage;
+    QUuid          fromCutId;
+    double         strength   = 0.9;
+    bool           sceneBreak = false;
+};
+
+// ---------------- 出力バインディング ----------------
+
+enum class OutputRole { MainVideo, MainVideoB, Overlay, Narration, Bgm, SoundEffect,
+                        Subtitle, Mask };
+enum class TrackResolveMode { Auto, Existing, AlwaysNew };
+enum class OutputState { NotGenerated, Queued, Running, Cached, Committed,
+                         Failed, Stale, Blocked };
+
+/// 合成後のプロンプトを固定する。仕様が変わっても勝手に再合成しない。13.4.4
+struct PromptLock
+{
+    bool       locked = false;
+    QString    prompt;
+    QString    negativePrompt;
+    QByteArray lockedAgainstHash;
+};
+
+/// 1 カットが生む 1 つの成果物の仕様。1 バインディング = 1 生成タスク = 1 出力。
+struct OutputBinding
+{
+    QUuid       id;
+    OutputRole  role    = OutputRole::MainVideo;
+    QString     roleTag;
+    bool        enabled = true;
+
+    TrackResolveMode resolveMode = TrackResolveMode::Auto;
+    QUuid       resolvedTrackId;
+    QString     trackNameHint;
+
+    QUuid       derivedFromBindingId;
+
+    int64_t     leadInFrames  = 0;
+    int64_t     leadOutFrames = 0;
+
+    QJsonObject paramPatch;
+    PromptLock  promptLock;
+
+    QUuid              lastTaskId;
+    std::vector<QUuid> committedClipIds;
+    QByteArray         committedSpecHash;
+    QByteArray         committedUpstreamHash;
+    OutputState        state = OutputState::NotGenerated;
+
+    QJsonObject toJson() const;
+    static OutputBinding fromJson(const QJsonObject& o);
+};
+
+// ---------------- CutClip ----------------
+
+/// TrackType::Storyboard 上にのみ置ける。合成には参加しない。
+class CutClip : public Clip
+{
+public:
+    CutClip();
+
+    ClipType type() const override { return ClipType::Cut; }
+    std::shared_ptr<Clip> clone() const override;
+
+    // --- 人間向けの仕様。これが真実である ---
+    QString slug() const;                void setSlug(const QString&);
+    QString label() const;               void setLabel(const QString&);
+    QString description() const;         void setDescription(const QString&);
+    QString dialogue() const;            void setDialogue(const QString&);
+    QString mood() const;                void setMood(const QString&);
+
+    CameraWork camera() const;           void setCamera(const CameraWork&);
+    const std::vector<QUuid>& characterIds() const;
+    void setCharacterIds(std::vector<QUuid>);
+    QUuid locationId() const;            void setLocationId(const QUuid&);
+
+    TransitionKind transitionIn()  const; void setTransitionIn(TransitionKind);
+    TransitionKind transitionOut() const; void setTransitionOut(TransitionKind);
+
+    BoardImage board() const;            void setBoard(const BoardImage&);
+
+    // --- 連続性 / 承認 ---
+    Continuity continuity() const;       void setContinuity(const Continuity&);
+    CutStatus  status() const;           void setStatus(CutStatus);
+    QString    reviewNote() const;       void setReviewNote(const QString&);
+
+    // --- 生成 ---
+    const std::vector<OutputBinding>& outputs() const;
+    OutputBinding*       findOutput(const QUuid& bindingId);
+    const OutputBinding* findOutput(OutputRole role, const QString& tag = {}) const;
+    void addOutput(OutputBinding b);
+    bool removeOutput(const QUuid& bindingId);
+
+    /// カスケード層 (疎パッチ)。キーの有無が「上書き済み」の定義そのもの。13.3.5
+    const QJsonObject& paramPatch() const;  void setParamPatch(QJsonObject);
+    const QJsonObject& biblePatch() const;  void setBiblePatch(QJsonObject);
+
+    // --- 表示 ---
+    /// アニマティック専用 (PreviewMode != Normal のときだけ呼ばれる)。13.8
+    LayerItem makeLayerItem(int64_t frame, int zIndex, const Track& t) const override;
+
+    /// 未生成カットのキャプション表示用。所有はこの CutClip。
+    const subtitle::SubtitleClip* animaticCaption() const;
+
+    /// 指定役割の生成仕様ハッシュ。13.6.2 / 13.14.5
+    /// 除外: status / reviewNote / label / slug / resolvedTrackId / trackNameHint /
+    ///       lastTaskId / committed* / state / leadIn,OutFrames / batchId / cutRef / purpose
+    QByteArray specHash(OutputRole role, const QString& tag = {}) const;
+
+    QJsonObject toJson() const;
+    static std::shared_ptr<CutClip> fromJson(const QJsonObject& o);
+};
+
+} // namespace yave
+```
+
+---
+
+## 11.14 core/StoryBible.h
+
+```cpp
+#pragma once
+
+#include "ai/AiGenerationParams.h"     // ImageReference
+
+#include <QUuid>
+#include <QString>
+#include <QJsonObject>
+
+#include <vector>
+
+namespace yave {
+
+struct StoryBibleCharacter
+{
+    QUuid   id;                  // 参照用。design.md §3.3 に従い UUID
+    QString key;                 // 人間可読キー。[a-z0-9._-]{1,64}。プロンプト参照と照合用
+    QString name;
+    QString appearance;
+    QString personality;
+    QString promptFragment;      // モデルへ渡す断片 (英語固定)
+    QString voiceId;
+    ai::ImageReference referenceImage;
+};
+
+struct StoryBibleLocation
+{
+    QUuid   id;
+    QString key;
+    QString name;
+    QString description;
+    QString promptFragment;
+    ai::ImageReference referenceImage;
+};
+
+/// プロジェクト単位の作品設定。Project が所有する。13.3.4
+struct StoryBible
+{
+    QString artStyle;
+    QString negativePrompt;
+    QString promptPrefix;
+    QString promptSuffix;
+
+    std::vector<StoryBibleCharacter> characters;
+    std::vector<StoryBibleLocation>  locations;
+
+    QJsonObject roleDefaults;     // role -> 疎パッチ (カスケード第 1 段)
+    QJsonObject promptTemplates;  // role -> テンプレート文字列
+
+    QJsonObject unknownFields;    // 前方互換
+
+    const StoryBibleCharacter* characterById(const QUuid&) const;
+    const StoryBibleCharacter* characterByKey(const QString&) const;
+    const StoryBibleLocation*  locationById(const QUuid&) const;
+    const StoryBibleLocation*  locationByKey(const QString&) const;
+
+    /// key を [a-z0-9._-]{1,64} に正規化し、既存と衝突しないよう一意化する
+    static QString sanitizeKey(const QString& raw, const QStringList& existing);
+
+    QJsonObject toJson() const;
+    static StoryBible fromJson(const QJsonObject& o);
+};
+
+} // namespace yave
+```
+
+---
+
+## 11.15 ai/StoryboardBatchJob.h
+
+`AiGenerationOrchestrator` の上位に立ち、選択カット群を依存順に流す。
+オーケストレータ自体はバッチの概念を持たない。設計は [13.6](13-ai-track.md)。
+
+```cpp
+#pragma once
+
+#include "../core/CutClip.h"
+
+#include <QObject>
+#include <QUuid>
+
+#include <set>
+#include <vector>
+
+namespace yave { class Project; }
+
+namespace yave::ai {
+
+class AiGenerationOrchestrator;
+
+/// DAG のノード。1 ノード = 1 OutputBinding = 1 生成タスク。
+struct BatchNode
+{
+    QUuid            cutId;
+    QUuid            bindingId;
+    QByteArray       specHash;
+    QByteArray       upstreamHash;
+    std::vector<int> deps;         // BatchNode 配列内のインデックス
+    double           weight = 1.0; // 推定所要秒。進捗の重み付けに使う
+};
+
+enum class BatchFailurePolicy { ContinueOthers, StopBranch, StopBatch };
+
+/// 投入前にユーザーへ提示する見積り。
+struct BatchEstimate
+{
+    int     taskCount          = 0;
+    int     skippedCount       = 0;   // 仕様が変わっていないためスキップ
+    int     notApprovedCount   = 0;
+    int     blockedCount       = 0;
+    int64_t estimatedSeconds   = 0;
+    double  estimatedCostUsd   = 0.0;
+    qint64  uploadBytes        = 0;
+    QStringList remoteEndpoints;      // 同意ダイアログに列挙する送信先
+    int     longestChainLength = 0;
+    QStringList warnings;
+};
+
+class StoryboardBatchJob : public QObject
+{
+    Q_OBJECT
+public:
+    struct Options
+    {
+        BatchFailurePolicy   failurePolicy   = BatchFailurePolicy::StopBranch;
+        bool                 includeRough    = false;  // ラフ生成モード
+        bool                 forceRegenerate = false;  // dirtiness を無視
+        std::set<OutputRole> roles;                    // 空 = 全役割
+    };
+
+    StoryboardBatchJob(Project* project,
+                       AiGenerationOrchestrator* orchestrator,
+                       QObject* parent = nullptr);
+
+    /// 副作用なし。BatchGenerateDialog の見積り表示に使う。
+    static BatchEstimate plan(const std::vector<QUuid>& cutIds,
+                              const Project& project,
+                              const Options& opt);
+
+    /// DAG を組んで投入する。戻り値は batchId。
+    QUuid  start(const std::vector<QUuid>& cutIds, const Options& opt);
+    void   cancel();
+
+    /// Sum(w_i * p_i) / Sum(w_i)。均等重みにしない理由は 13.6.5。
+    double aggregatedProgress() const;
+
+signals:
+    void nodeStateChanged(QUuid cutId, QUuid bindingId, OutputState s);
+    void progressChanged(double p);
+    void finished(int succeeded, int failed, int skipped);
+};
+
+} // namespace yave::ai
+```
+
+---
+
+## 11.16 app/models/SelectionModel.h
+
+選択は `Timeline` ではなく Controller 層が持つ。
+Undo の対象にもプロジェクト JSON の保存対象にもしない。設計は [13.5](13-ai-track.md)。
+
+```cpp
+#pragma once
+
+#include "../../core/TimeRange.h"
+
+#include <QObject>
+#include <QUuid>
+
+#include <optional>
+#include <vector>
+
+namespace yave { class Timeline; }
+
+namespace yave::app {
+
+enum class SelectionMode { Replace, Add, Toggle, ExtendRange };
+
+struct TimelineSelection
+{
+    std::vector<QUuid>       clipIds;
+    std::vector<QUuid>       trackIds;
+    std::optional<TimeRange> range;
+    std::vector<QUuid>       rangeTrackIds;   // 空 = 全トラックに掛かる範囲選択
+    QUuid                    primaryClipId;   // インスペクタが表示する主対象
+};
+
+/// EditController が所有し、QML へコンテキストプロパティとして公開する。
+/// タイムラインとボードビューが同じインスタンスに bind することで、
+/// 双方向同期は自動的に満たされる (個別の同期コードを書かない)。
+class SelectionModel : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(int  clipCount READ clipCount NOTIFY selectionChanged)
+    Q_PROPERTY(bool hasRange  READ hasRange  NOTIFY selectionChanged)
+public:
+    explicit SelectionModel(QObject* parent = nullptr);
+
+    Q_INVOKABLE void selectClip(const QUuid& id, SelectionMode m);
+    Q_INVOKABLE void selectTrack(const QUuid& id, SelectionMode m);
+    Q_INVOKABLE void setRange(qint64 start, qint64 duration);
+    Q_INVOKABLE void clear();
+
+    int  clipCount() const;
+    bool hasRange() const;
+    const TimelineSelection& selection() const;
+
+    /// 生成対象カットの解決。
+    /// 明示選択されたカット ∪ (range に交差する可視 Storyboard トラック上のカット)。
+    /// 部分的にしか掛かっていないカットも含める (確認ダイアログにその旨を書く)。
+    std::vector<QUuid> resolvedCutIds(const Timeline& tl) const;
+
+public slots:
+    /// Timeline からの削除通知を購読して自己修復する (ID のみを保持しているため)
+    void onClipRemoved(const QUuid& clipId);
+    void onTrackRemoved(const QUuid& trackId);
+
+signals:
+    void selectionChanged();
+};
+
+} // namespace yave::app
+```
+
+---
+
+## 11.17 クラス間の所有関係まとめ
 
 ```
 Project (所有)
@@ -1580,8 +2075,17 @@ Project (所有)
  ├── QUndoStack (unique_ptr)
  │     └── QUndoCommand (Undo 用に Clip の shared_ptr を保持しうる)
  ├── AiGenerationOrchestrator (unique_ptr)
+ │     ├── std::array<QThreadPool, 4>                 ← 実行レーン (13.6.4)
  │     └── std::vector<std::unique_ptr<AiGenerationTask>>
+ ├── StoryBible                                       ← 13.3.4
  └── SubtitleStylePresetTable
+
+EditController (Controller 層, 所有)
+ └── SelectionModel                                   ← 13.5。永続化も Undo もしない
+
+StoryboardController (Controller 層, 所有)
+ ├── CutListModel                                     ← ボードビュー用
+ └── StoryboardBatchJob (unique_ptr)                  ← 13.6。Orchestrator の上位
 
 PluginManager (singleton, 所有)
  ├── Vst3Registry

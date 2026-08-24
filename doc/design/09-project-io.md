@@ -30,7 +30,7 @@
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "application": { "name": "YAVE", "version": "1.0.0" },
   "savedAt": "2026-08-24T15:04:05Z",
 
@@ -68,6 +68,15 @@
       "style": { "fontFamily": "Noto Sans JP", "fontPointSize": 48.0, "...": "..." }
     }
   ],
+
+  "storyBible": {
+    "artStyle": "水彩調のアニメーション、柔らかい光",
+    "negativePrompt": "低品質, 文字, 余分な指",
+    "characters": [ /* 9.3.1 参照 */ ],
+    "locations":  [ /* 9.3.1 参照 */ ],
+    "roleDefaults":    { "mainVideo": { "modelId": "wan2.2-i2v-14b", "steps": 30 } },
+    "promptTemplates": { "mainVideo": "{{artStyle}}. {{description}} {{camera}}" }
+  },
 
   "tracks": [ /* 9.3 参照。無限レイヤー */ ],
 
@@ -130,12 +139,77 @@
     "name": "AI Generated",
     "type": "aiGenerated",
     "clips": [ ... ]
+  },
+  {
+    "id": "eeee-...",
+    "name": "絵コンテ",
+    "type": "storyboard",
+    "visible": true,
+    "height": 96,
+    "color": "#7a5f3a",
+    "aiRole": "",
+    "storyboardTrackId": null,
+    "roleDefaults": { "mainVideo": { "steps": 24 } },
+    "clips": [ /* 9.4.5 CutClip */ ]
+  },
+  {
+    "id": "gggg-...",
+    "name": "AI Video",
+    "type": "video",
+    "aiRole": "mainVideo",
+    "storyboardTrackId": "eeee-...",
+    "clips": [ /* 生成された VideoClip */ ]
   }
 ]
 ```
 
 > **`zOrder` フィールドを持たない**ことが重要。配列順序が唯一の真実であり、
 > 二重管理によるずれを構造的に排除する。
+
+### 9.3.1 AIトラック関連のトラックフィールド
+
+以下は全トラック型で任意。既定は `""` / `null` / `{}`。詳細は [13.3](13-ai-track.md)。
+
+| キー | 意味 |
+|---|---|
+| `aiRole` | このトラックが担う出力役割。`mainVideo` / `narration` / `bgm` / `se` / `subtitle` / `mask` など。空なら手動作成の通常トラック |
+| `storyboardTrackId` | このトラックを生成した絵コンテトラックの ID。役割の解決はこの ID でスコープされる |
+| `roleDefaults` | 役割ごとの既定パラメータ (カスケード第 2 段) |
+
+`storyBible` はルート直下に置く。実 JSON は [13.10.1](13-ai-track.md) を参照。
+
+```json
+"storyBible": {
+  "artStyle": "水彩調のアニメーション、柔らかい光",
+  "negativePrompt": "低品質, 文字, 余分な指",
+  "promptPrefix": "",
+  "promptSuffix": "",
+  "characters": [
+    { "id": "3b1e-...", "key": "aoi", "name": "葵",
+      "appearance": "黒髪ショート、紺のセーラー服",
+      "promptFragment": "short black hair, navy sailor uniform",
+      "voiceId": "piper-ja-female-1",
+      "referenceImage": { "source": "filePath",
+                          "filePath": "assets/bible/aoi.png", "strength": 1.0 } }
+  ],
+  "locations": [
+    { "id": "9c22-...", "key": "rooftop", "name": "校舎の屋上",
+      "promptFragment": "school rooftop, chain-link fence, morning haze" }
+  ],
+  "roleDefaults": {
+    "mainVideo": { "modelId": "wan2.2-i2v-14b", "steps": 30 },
+    "narration": { "modelId": "piper-ja", "targetLufs": -16.0 }
+  },
+  "promptTemplates": {
+    "mainVideo": "{{artStyle}}. {{location}}. {{characters}}. {{description}} {{camera}} {{mood}}"
+  }
+}
+```
+
+> **キャラクターとロケーションが `id` (UUID) と `key` の両方を持つ理由**:
+> カットからの参照は §3.3 に従い UUID で行う。一方 `key` は
+> プロンプト内での参照と L1 モデル出力の照合に使う人間可読キーである。
+> `key` を変えても既存カットの参照は壊れない。
 
 ## 9.4 クリップ
 
@@ -272,6 +346,104 @@
 }
 ```
 
+### 9.4.5 CutClip
+
+AIトラック (`"type":"storyboard"`) にのみ置ける、カット単位の演出指示。
+**メディアではなく仕様であり、再生成の source of truth である。**
+各フィールドの意味は [13.3.2](13-ai-track.md) / [13.3.3](13-ai-track.md)。
+
+```json
+{
+  "id": "cut-0001-...",
+  "type": "cut",
+  "range": { "start": 0, "duration": 480 },
+
+  "label": "",
+  "slug": "屋上・朝",
+  "description": "葵が屋上のフェンス越しに街を見下ろす。風で髪が揺れる。",
+  "dialogue": "……今日で、最後か。",
+  "mood": "静か / 寂しい",
+
+  "characterIds": ["3b1e-..."],
+  "locationId": "9c22-...",
+
+  "camera": { "size": "medium", "angle": "eyeLevel", "movement": "slowPushIn", "note": "" },
+  "transitionIn": "cut",
+  "transitionOut": "dissolve",
+
+  "board": {
+    "origin": "userFile",
+    "assetId": "b001-...",
+    "sourceTrackId": null,
+    "sourceFrame": 0,
+    "generatedByTaskId": null
+  },
+
+  "continuity": {
+    "mode": "fromBoardImage",
+    "fromCutId": null,
+    "strength": 0.9,
+    "sceneBreak": false
+  },
+
+  "status": "inReview",
+  "reviewNote": "",
+
+  "paramPatch": { "seed": 987654321 },
+  "biblePatch": {},
+
+  "outputs": [
+    {
+      "id": "ob-1",
+      "role": "mainVideo",
+      "roleTag": "",
+      "enabled": true,
+      "resolveMode": "auto",
+      "resolvedTrackId": "gggg-...",
+      "trackNameHint": "AI Video",
+      "derivedFromBindingId": null,
+      "leadInFrames": 0,
+      "leadOutFrames": 15,
+      "paramPatch": { "modelId": "wan2.2-i2v-14b" },
+      "promptLock": { "locked": false, "prompt": "", "negativePrompt": "",
+                      "lockedAgainstHash": "" },
+      "lastTaskId": "task-uuid-...",
+      "committedClipIds": ["c001-..."],
+      "committedSpecHash": "sha256:ab12...",
+      "committedUpstreamHash": "sha256:cd34...",
+      "state": "committed"
+    },
+    {
+      "id": "ob-2",
+      "role": "narration",
+      "resolveMode": "auto",
+      "resolvedTrackId": "hhhh-...",
+      "paramPatch": { "voiceId": "piper-ja-female-1" },
+      "committedClipIds": ["c002-..."],
+      "state": "committed"
+    },
+    {
+      "id": "ob-3",
+      "role": "subtitle",
+      "resolveMode": "auto",
+      "resolvedTrackId": null,
+      "derivedFromBindingId": "ob-2",
+      "state": "notGenerated"
+    }
+  ],
+
+  "generatedByTaskId": null
+}
+```
+
+> **カット番号はフィールドとして持たない。** トラック内の配列順序から導出する。
+> `zOrder` を持たないのと同じ理由である (9.3 冒頭)。
+> 手動採番したい場合のために `label` を別に持ち、空なら UI が導出番号を表示する。
+>
+> `paramPatch` / `biblePatch` は**疎なパッチ**である。
+> キーが存在すること自体が「その段で上書きされている」ことを意味し、
+> 「継承に戻す」はキーの削除で表現される ([13.3.5](13-ai-track.md))。
+
 ## 9.5 AI タスク
 
 **生成パラメータをすべて保存する。** これにより、キャッシュが消えても再生成できる。
@@ -285,6 +457,9 @@
     "completedAt": "2026-08-24T14:03:22Z",
     "retryCount": 0,
     "errorMessage": "",
+    "batchId": "batch-uuid-...",
+    "purpose": "commit",
+    "cutRef": { "cutClipId": "cut-0001-...", "bindingId": "ob-1" },
     "params": {
       "kind": "video",
       "targetTrackId": "dddd-...",
@@ -342,6 +517,29 @@
 
 `"collected": true` の場合、`path` は `assets/generated/...` を指し、
 プロジェクトと一緒に持ち運べる ([7.8.3](07-ai-orchestrator.md) 参照)。
+
+### 9.5.1 AIトラック由来のフィールド
+
+| キー | 意味 |
+|---|---|
+| `batchId` | `StoryboardBatchJob` に属する場合のバッチ ID。タスクパネルのグループ化に使う |
+| `purpose` | `"commit"` / `"animaticPreview"`。プレビュー用 TTS はトラックへコミットしない |
+| `cutRef` | どのカットのどの出力バインディングから投げられたか |
+
+`cutRef` が設定されているタスクでは、配置は `OutputBinding` が決める。
+`params.targetTrackId` / `createNewTrack` / `replaceExistingClips` は無視される
+([13.14.6](13-ai-track.md))。
+
+### 9.5.2 永続化ポリシー
+
+**プロジェクト JSON に書き出すのは、`state` が `cached` または `committed` で、
+かつ生きた `OutputBinding` から参照されているタスクだけ**とする。
+それ以外 (`failed` / `cancelled` / 参照が切れたもの) は
+`.yave_cache/tasks.json` にのみ置く。
+
+> 100 カットのプロジェクトを 5 回作り直すと、素直に全部書けば数千件のタスクレコードが
+> 積み上がり、[9.14](#914-ファイルサイズの目安) のサイズ予算を破る。
+> UI に「生成履歴を整理」を用意し、参照されていないタスクを一括削除できるようにする。
 
 ## 9.6 プラグイン設定
 
@@ -420,7 +618,7 @@ struct LoadResult
 class ProjectSerializer
 {
 public:
-    static constexpr int kCurrentSchemaVersion = 1;
+    static constexpr int kCurrentSchemaVersion = 2;   // 2: AIトラック (13 章)
 
     /// 保存。アトミックに書く (テンポラリへ書いてから rename)。
     static bool save(const Project& project, const QString& path,
@@ -525,6 +723,59 @@ inline constexpr auto kEndReference  = "endReference";
 inline constexpr auto kVideoReference= "videoReference";
 inline constexpr auto kExtraParams   = "extraParams";
 
+// AIトラック / 絵コンテ (13 章)
+inline constexpr auto kStoryBible     = "storyBible";
+inline constexpr auto kCharacters     = "characters";
+inline constexpr auto kLocations      = "locations";
+inline constexpr auto kRoleDefaults   = "roleDefaults";
+inline constexpr auto kPromptTemplates= "promptTemplates";
+inline constexpr auto kArtStyle       = "artStyle";
+inline constexpr auto kPromptPrefix   = "promptPrefix";
+inline constexpr auto kPromptSuffix   = "promptSuffix";
+inline constexpr auto kPromptFragment = "promptFragment";
+inline constexpr auto kAppearance     = "appearance";
+inline constexpr auto kAiRole         = "aiRole";
+inline constexpr auto kStoryboardTrackId = "storyboardTrackId";
+
+// CutClip
+inline constexpr auto kSlug           = "slug";
+inline constexpr auto kLabel          = "label";
+inline constexpr auto kDescription    = "description";
+inline constexpr auto kDialogue       = "dialogue";
+inline constexpr auto kMood           = "mood";
+inline constexpr auto kCamera         = "camera";
+inline constexpr auto kCharacterIds   = "characterIds";
+inline constexpr auto kLocationId     = "locationId";
+inline constexpr auto kTransitionIn   = "transitionIn";
+inline constexpr auto kTransitionOut  = "transitionOut";
+inline constexpr auto kBoard          = "board";
+inline constexpr auto kContinuity     = "continuity";
+inline constexpr auto kStatus         = "status";
+inline constexpr auto kReviewNote     = "reviewNote";
+inline constexpr auto kParamPatch     = "paramPatch";
+inline constexpr auto kBiblePatch     = "biblePatch";
+
+// OutputBinding
+inline constexpr auto kOutputs        = "outputs";
+inline constexpr auto kRole           = "role";
+inline constexpr auto kRoleTag        = "roleTag";
+inline constexpr auto kResolveMode    = "resolveMode";
+inline constexpr auto kResolvedTrackId= "resolvedTrackId";
+inline constexpr auto kTrackNameHint  = "trackNameHint";
+inline constexpr auto kDerivedFromBindingId = "derivedFromBindingId";
+inline constexpr auto kLeadInFrames   = "leadInFrames";
+inline constexpr auto kLeadOutFrames  = "leadOutFrames";
+inline constexpr auto kPromptLock     = "promptLock";
+inline constexpr auto kLockedAgainstHash = "lockedAgainstHash";
+inline constexpr auto kCommittedClipIds  = "committedClipIds";
+inline constexpr auto kCommittedSpecHash = "committedSpecHash";
+inline constexpr auto kCommittedUpstreamHash = "committedUpstreamHash";
+
+// AI タスク (9.5.1)
+inline constexpr auto kBatchId        = "batchId";
+inline constexpr auto kCutRef         = "cutRef";
+inline constexpr auto kPurpose        = "purpose";
+
 } // namespace yave::io::keys
 ```
 
@@ -565,6 +816,8 @@ EnumMap<TrackType>::table()
         { TrackType::Audio,       "audio"       },
         { TrackType::Subtitle,    "subtitle"    },
         { TrackType::AiGenerated, "aiGenerated" },
+        { TrackType::Storyboard,  "storyboard"  },   // 13 章
+        { TrackType::Unknown,     "unknown"     },
     };
     return t;
 }
@@ -593,6 +846,54 @@ EnumMap<ai::I2VReferenceMode>::table()
 
 } // namespace yave::io
 ```
+
+### 9.9.1 AIトラック関連の enum 表
+
+[13 章](13-ai-track.md)で追加する enum は、すべてここに特殊化を置く。
+**enum を足して表を足し忘れると、保存はできるが読み込めないプロジェクトが生まれる。**
+
+| enum | 文字列 |
+|---|---|
+| `ClipType` | 既存 + `cut` |
+| `OutputRole` | `mainVideo`, `mainVideoB`, `overlay`, `narration`, `bgm`, `se`, `subtitle`, `mask` |
+| `TrackResolveMode` | `auto`, `existing`, `alwaysNew` |
+| `OutputState` | `notGenerated`, `queued`, `running`, `cached`, `committed`, `failed`, `stale`, `blocked` |
+| `CutStatus` | `notStarted`, `rough`, `inReview`, `approved` |
+| `ContinuityMode` | `none`, `fromBoardImage`, `fromPreviousEnd`, `fromCutId` |
+| `ShotSize` | `unspecified`, `extremeWide`, `wide`, `full`, `medium`, `closeUp`, `extremeCloseUp` |
+| `CameraAngle` | `unspecified`, `eyeLevel`, `high`, `low`, `birdsEye`, `wormsEye`, `dutch` |
+| `CameraMovement` | `unspecified`, `fixed`, `panLeft`, `panRight`, `tiltUp`, `tiltDown`, `dolly`, `slowPushIn`, `pullOut`, `handheld`, `crane`, `follow` |
+| `TransitionKind` | `cut`, `dissolve`, `fadeToBlack`, `fadeFromBlack`, `wipe`, `matchCut` |
+| `BoardImage::Origin` | `none`, `userFile`, `generated`, `timelineFrame` |
+| `ai::GenerationKind` | 既存 + `storyboard` |
+| `ai::GenerationPurpose` | `commit`, `animaticPreview` |
+| `ai::PlanFitMode` | `scaleToFit`, `keepModelDurations`, `trimToRange` |
+
+### 9.9.2 未知の enum 値の扱い
+
+`enumFromString(s, fallback)` の既定フォールバックに任せてよいのは、
+**意味を失っても実害がない enum に限る** (例: `CameraMovement` が
+`Unspecified` に落ちてもプロンプトの語彙がひとつ減るだけである)。
+
+`TrackType` は例外とする。未知の型を `Video` などにフォールバックさせると、
+新しい種類のトラックが**別の意味を持つトラックとして解釈され、合成に混ざる**。
+
+```cpp
+// TrackType だけは専用の変換を使う
+TrackType parseTrackType(const QString& s)
+{
+    for (const auto& [e, str] : EnumMap<TrackType>::table())
+        if (s == QLatin1String(str)) return e;
+    return TrackType::Unknown;      // フォールバックしない
+}
+```
+
+`TrackType::Unknown` のトラックは、
+
+- 合成にもオーディオグラフにも参加しない
+- クリップを一切受け付けない
+- UI では読み取り専用として表示する
+- **保存時は元の JSON をそのまま書き戻す** (9.11.2 を Track へ拡張する)
 
 ## 9.10 パス解決
 
@@ -676,7 +977,7 @@ struct Migration { int fromVersion; MigrationFn fn; };
 inline const std::vector<Migration>& migrations()
 {
     static const std::vector<Migration> table = {
-        // { 1, &migrate_1_to_2 },
+        { 1, &migrate_1_to_2 },     // AIトラック (13 章) の追加
         // { 2, &migrate_2_to_3 },
     };
     return table;
@@ -700,6 +1001,39 @@ void ProjectSerializer::applyMigrations(QJsonObject& root, int fromVersion, Load
         ++v;
         r->migrated = true;
     }
+}
+```
+
+#### migrate_1_to_2 (AIトラックの追加)
+
+追加のみで破壊的変更は無いが、それでもバージョンを上げる。
+
+> **理由**: v1 のライタが v2 のプロジェクトを保存すると、ルートの `storyBible` を
+> 丸ごと落とし、`"type":"storyboard"` のトラックを別の型として書き戻してしまう。
+> これは 9.11.2 の未知フィールド保持を `Track` とルートへ拡張することで防ぐが、
+> それが入っているかどうかをバージョンで判別できる必要がある。
+
+```cpp
+void migrate_1_to_2(QJsonObject& root, LoadResult* r)
+{
+    // (1) 作品設定を空で用意する
+    if (!root.contains(keys::kStoryBible))
+        root[keys::kStoryBible] = QJsonObject{};
+
+    // (2) 各トラックへ AIトラック関連の既定値を入れる
+    QJsonArray tracks = root[keys::kTracks].toArray();
+    for (int i = 0; i < tracks.size(); ++i) {
+        QJsonObject t = tracks[i].toObject();
+        if (!t.contains(keys::kAiRole))            t[keys::kAiRole] = QString();
+        if (!t.contains(keys::kStoryboardTrackId)) t[keys::kStoryboardTrackId] = QJsonValue::Null;
+        if (!t.contains(keys::kRoleDefaults))      t[keys::kRoleDefaults] = QJsonObject{};
+        tracks[i] = t;
+    }
+    root[keys::kTracks] = tracks;
+
+    // v1 のプロジェクトには CutClip も storyboard トラックも存在しないため、
+    // クリップ側の変換は不要である。
+    Q_UNUSED(r);
 }
 ```
 
@@ -731,6 +1065,19 @@ protected:
     QJsonObject unknownFields_;
 };
 ```
+
+**この仕組みは `Clip` だけでなく `Track` とプロジェクトルートにも持たせる。**
+
+```cpp
+class Track { /* ... */ QJsonObject unknownFields_; };   // 9.3.1 / 11.2
+
+class Project { /* ... */ QJsonObject unknownRootFields_; };
+```
+
+> schemaVersion 2 で `storyBible` をルート直下に、`aiRole` / `storyboardTrackId` /
+> `roleDefaults` を各トラックに追加した。`Clip` にしか未知フィールド保持が無いままだと、
+> **前方互換の約束が新しいデータをまったくカバーしない**。
+> `TrackType::Unknown` のトラック (9.9.2) は、この仕組みで丸ごと原文保存される。
 
 ```cpp
 QJsonObject ProjectSerializer::serializeClip(const Clip& c, const SaveOptions& o)

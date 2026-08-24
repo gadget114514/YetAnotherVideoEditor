@@ -48,8 +48,12 @@ enum class GenerationKind
     Subtitle,       // 字幕 (STT / スクリプト生成)
     Mask,           // マスク画像シーケンス
     EffectMetadata, // エフェクトパラメータ (自動カラーグレード等)
-    Image           // 静止画
+    Image,          // 静止画
+    Storyboard      // カット列そのもの (L1 プランニング)。13 章
 };
+
+/// 生成物の用途。AnimaticPreview はタイムラインへコミットしない (13.8.4)
+enum class GenerationPurpose { Commit, AnimaticPreview };
 
 /// 動画生成のサブモード
 enum class VideoGenMode
@@ -147,7 +151,22 @@ struct AiGenerationParams
     std::vector<QPointF> maskHintPoints;    // クリックによるヒント (SAM 用)
     bool            maskTrackAcrossFrames = true;
 
+    // --- Storyboard (L1 プランニング。13.7) ---
+    QString              storyboardRequest;      // ユーザーの自然言語要求
+    int                  targetCutCount = 0;     // 0 = モデルに委ねる
+    std::set<OutputRole> desiredRoles;
+    int                  planSchemaVersion = 1;
+    PlanFitMode          planFitMode = PlanFitMode::ScaleToFit;
+
+    // --- AIトラックとの結び付き (13 章) ---
+    struct CutRef { QUuid cutClipId; QUuid bindingId; };
+    std::optional<CutRef> cutRef;          // カット由来のタスクか
+    QUuid                 batchId;         // StoryboardBatchJob に属する場合
+    GenerationPurpose     purpose = GenerationPurpose::Commit;
+
     // --- 出力の扱い ---
+    // cutRef が設定されている場合、この 3 つは無視される。
+    // 配置は OutputBinding が唯一の真実である (13.14.6)。
     bool  replaceExistingClips = false;   // 区間内の既存クリップを置き換えるか
     bool  createNewTrack = false;         // 新規トラックを作って置くか
 
@@ -173,6 +192,10 @@ struct AiGenerationParams
 | `subtitleMode == SpeechToText && sourceAudioTrackId.isNull()` | `error.ai.missingAudioSource` |
 | `modelId` が `ProviderRegistry` で解決できない | `error.ai.unknownModel` |
 | 選択モデルが要求する VRAM > 利用可能 VRAM (ローカル時) | `error.ai.insufficientVram` (警告に留める) |
+| `cutRef` が指すカット / バインディングが存在しない | `error.ai.cut.boundTrackMissing` |
+| `cutRef` があり、解決先トラックの型が役割と不一致 | `error.ai.cut.trackTypeMismatch` |
+| `kind == Storyboard && storyboardRequest.isEmpty()` | `error.ai.storyboard.emptyPlan` |
+| `kind == Storyboard` かつ選択プロバイダがテキスト生成に非対応 | `error.ai.noProvider` |
 
 ## 7.3 タスクのライフサイクル
 
@@ -284,7 +307,10 @@ public:
 
     /// タスクを投入し、即座にプレースホルダクリップを配置する。
     /// 戻り値はタスク ID。
-    QUuid submit(const AiGenerationParams& params);
+    /// 対象が TrackType::Storyboard のトラックの場合はプレースホルダを置かない
+    /// (CutClip 自身がプレースホルダである。13.9.3)。
+    QUuid submit(const AiGenerationParams& params,
+                 TaskPriority priority = TaskPriority::Interactive);
 
     void cancel(const QUuid& taskId);
     void cancelAll();
@@ -318,7 +344,9 @@ private:
     void onTaskCached(AiGenerationTask* task);         // UI スレッド
 
     Project*                 project_ = nullptr;
-    QThreadPool              pool_;                    // 既定 2 スレッド
+
+    // 実行レーン。単一プールにしない理由は 7.4.3。
+    std::array<QThreadPool, 4> lanes_;
     std::vector<std::unique_ptr<AiGenerationTask>> tasks_;
     ProviderRegistry*        registry_ = nullptr;
     GenerationCache*         cache_ = nullptr;
@@ -431,6 +459,46 @@ void AiGenerationOrchestrator::runTask(AiGenerationTask* task)
     }
 }
 ```
+
+### 7.4.3 実行レーンと優先度
+
+単一の `QThreadPool` (既定 2 スレッド) は、[13 章](13-ai-track.md)のバッチ生成では成立しない。
+
+- 20 カット x 3 出力 = 60 タスクが一度に積まれる
+- GPU 律速 / ネットワーク律速 / CPU 律速で最適な並列度が正反対である
+- **14B クラスの動画モデルを 2 本同時に走らせると VRAM が破綻する。**
+  「2 スレッド」はこれを許してしまう
+
+```cpp
+enum class ExecutionLane { LocalGpu, LocalCpu, Remote, Sidecar };
+enum class TaskPriority  { Batch = 0, Interactive = 1 };
+
+std::array<QThreadPool, 4> lanes_;
+//  LocalGpu = 1
+//  LocalCpu = max(1, QThread::idealThreadCount() / 2)
+//  Remote   = 6   (エンドポイント毎に ProviderCapability::concurrencyLimit で追加制限)
+//  Sidecar  = 設定値。既定 1
+```
+
+- レーンは `ProviderCapability` から導出する
+  (`requiresNetwork` / `estimatedVramMb` / プロバイダ種別)
+- リモートの HTTP 429 は再試行可能エラーとして扱い、**指数バックオフ**を掛ける
+  (7.4.2 の既存リトライ経路にバックオフを追加する)
+- 単発の `submit()` は `Interactive`、バッチ投入は `Batch`。
+  **60 タスクのバッチの後ろで単発生成が飢えないようにする**
+
+> [1.3](01-architecture.md) のスレッドモデル表もこれに合わせてある。
+
+### 7.4.4 バッチ生成
+
+複数カットの一括生成は `StoryboardBatchJob` ([13.6](13-ai-track.md)) が担当し、
+本クラスはタスク単位のままとする。オーケストレータにバッチの概念を持ち込まない。
+
+バッチ側が必要とする本クラスの機能は次の 3 つだけである。
+
+1. `submit(params, TaskPriority::Batch)`
+2. `taskStateChanged` / `taskProgressChanged` の購読
+3. `cancel(taskId)`
 
 ## 7.5 入力の準備 (`prepareInput`)
 
@@ -560,6 +628,13 @@ struct ProviderCapability
     bool    supportsCancel   = true;
     int64_t estimatedVramMb  = 0;
     QStringList supportedModelIds;
+
+    // --- 見積りとスケジューリング (13.6 が使う) ---
+    double  estimatedSecondsPerOutputSecond = 0.0;  // 進捗の重み付けと所要時間見積り
+    double  costPerOutputSecondUsd          = 0.0;  // バッチ前のコスト提示
+    int     concurrencyLimit                = 0;    // 0 = 無制限。エンドポイント毎の上限
+    bool    supportsStructuredOutput        = false;// response_format: json_schema に対応するか
+    int     maxInputTokens                  = 0;
 };
 
 struct GenerationInput
@@ -843,11 +918,18 @@ QString GenerationCache::makeKey(const AiGenerationParams& p) const
 {
     if (p.seed < 0) return {};      // ランダムシードはキャッシュしない
 
+    if (p.kind == GenerationKind::Storyboard) return {};   // L1 は毎回違う案を期待する
+
     QCryptographicHash h(QCryptographicHash::Sha256);
     QJsonObject o = p.toJson();
-    o.remove("targetTrackId");      // 配置先はキーに含めない
-    o.remove("createNewTrack");
-    o.remove("replaceExistingClips");
+
+    // 配置先・作業状態はキーに含めない。
+    // 含めてしまうと「カットを承認済にしただけ」でキーが変わり、同じ内容に再課金される。
+    // 除外集合は 13.14.5 に列挙し、tst_cutclip.cpp が固定する。
+    for (const char* k : { "targetTrackId", "createNewTrack", "replaceExistingClips",
+                           "cutRef", "batchId", "purpose" })
+        o.remove(QLatin1String(k));
+
     h.addData(QJsonDocument(o).toJson(QJsonDocument::Compact));
 
     // 参照画像の内容もキーに含める (パスだけでは中身の変更を検出できない)
@@ -889,6 +971,9 @@ private:
 class CommitGeneratedAssetCommand : public QUndoCommand
 {
 public:
+    /// cutRef が設定されている場合、クリップ挿入と OutputBinding への書き戻しを
+    /// 原子的に行う。2 コマンドに分けると「クリップは入ったがバインディングは未更新」
+    /// という半端に undo された状態が到達可能になり、次のバッチが二重生成する (13.9.1)。
     CommitGeneratedAssetCommand(Timeline* tl,
                                 const QUuid& taskId,
                                 std::vector<GeneratedAsset> assets,
@@ -896,7 +981,16 @@ public:
 
     void redo() override
     {
+        // (0) L1 プランはメディアではないので別経路へ。13.7.5
+        if (params_.kind == GenerationKind::Storyboard) {
+            // ApplyStoryboardPlanCommand を子コマンドとして実行する
+            // (差分プレビューでユーザーが承認済みであることが前提)
+            applyPlan();
+            return;
+        }
+
         // (1) プレースホルダを取り除く
+        //     Storyboard トラックにはそもそもプレースホルダを置いていない (13.9.3)
         placeholder_ = timeline_->takePlaceholder(taskId_);
 
         // (2) 生成種別に応じてクリップを作る
@@ -942,7 +1036,16 @@ public:
         for (auto& c : inserted_) targetTrack()->removeClip(c->id());
         inserted_.clear();
         if (placeholder_) timeline_->restorePlaceholder(placeholder_);
+        if (bindingSnapshot_) restoreBinding(*bindingSnapshot_);
     }
+
+private:
+    /// cutRef があるとき redo の末尾で実行する。
+    ///   resolvedTrackId / committedClipIds /
+    ///   committedSpecHash / committedUpstreamHash / state = Committed
+    void writeBackBinding();
+    /// undo 用に取っておく直前の OutputBinding
+    std::optional<OutputBinding> bindingSnapshot_;
 };
 ```
 
@@ -1024,6 +1127,11 @@ public:
 └──────────────────────────────────────────────────────────┘
 ```
 
+カットから開く場合は**1 つの `OutputBinding` にスコープされた**モードになる。
+ヘッダに「カット 3 / ナレーション」と出し、値はカスケード解決済みで前埋めされ、
+バインディングが所有するフィールド (`対象トラック` / `区間`) はグレーアウトされる。
+詳細は [13.11.5](13-ai-track.md)。
+
 ### 7.10.2 タスク一覧パネル (`AiTaskListPanel.qml`)
 
 ```
@@ -1037,3 +1145,22 @@ public:
 │ ✗ 失敗  I2V  接続エラー          [ 再試行 ] [ × ]     │
 └────────────────────────────────────────────┘
 ```
+
+タスクが `batchId` を持つ場合は、折りたためるバッチ親行の下にグループ化して表示し、
+親行には重み付き集約進捗を出す ([13.6.5](13-ai-track.md))。
+子行のラベルは「カット 3 / 映像」で、クリックするとそのカットへナビゲートする。
+
+## 7.11 AIトラック (絵コンテ) との関係
+
+本章は「1 区間 = 1 生成」を定義している。その上に、
+
+- カット単位の演出指示 (`CutClip`) と、1 カットから複数出力への展開 (`OutputBinding`)
+- 選択したカット群の依存順バッチ生成
+- 自然言語からカット列を設計する L1 プランニング (`GenerationKind::Storyboard`)
+- 未生成カットのアニマティック再生
+
+を積んだものが **AIトラック**である。定義は [13 章](13-ai-track.md)。
+
+本章のクラスは AIトラックを知らなくても成立する。
+`AiGenerationOrchestrator` はタスク単位のままであり、
+バッチと役割解決は `StoryboardBatchJob` / `RoleTrackResolver` が上位で担当する。

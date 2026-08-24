@@ -45,11 +45,15 @@ YetAnotherVideoEditor/
 │   │   ├── VideoClip.h / .cpp
 │   │   ├── AudioClip.h / .cpp
 │   │   ├── AiPlaceholderClip.h / .cpp
+│   │   ├── CutClip.h / .cpp        AIトラックの 1 区間 = 演出指示 (13章)
+│   │   ├── StoryBible.h / .cpp     キャラ/ロケ/画風。プロンプトへカスケードする
 │   │   ├── Track.h / .cpp
 │   │   ├── Timeline.h / .cpp
 │   │   ├── Project.h / .cpp
 │   │   ├── AssetLibrary.h / .cpp   素材(ファイル)の登録・参照カウント・プロキシ管理
 │   │   ├── RenderSnapshot.h / .cpp UI -> Render の受け渡し構造体
+│   │   ├── ai/                     AI の純データ型 (Qt Core のみ依存。13.14.3)
+│   │   │   └── AiGenerationParams.h / .cpp
 │   │   └── commands/               QUndoCommand 派生
 │   │       ├── AddTrackCommand.h
 │   │       ├── RemoveTrackCommand.h
@@ -59,7 +63,16 @@ YetAnotherVideoEditor/
 │   │       ├── TrimClipCommand.h
 │   │       ├── SplitClipCommand.h
 │   │       ├── ImportSubtitleCommand.h
-│   │       └── CommitGeneratedAssetCommand.h
+│   │       ├── CommitGeneratedAssetCommand.h
+│   │       ├── AddCutCommand.h                 ┐
+│   │       ├── RemoveCutCommand.h              │
+│   │       ├── ReorderCutsCommand.h            │
+│   │       ├── EditCutSpecCommand.h            ├ 13.9
+│   │       ├── SetCutStatusCommand.h           │
+│   │       ├── BindCutOutputCommand.h          │
+│   │       ├── EditStoryBibleCommand.h         │
+│   │       ├── ApplyStoryboardPlanCommand.h    │
+│   │       └── FitCutToDialogueCommand.h       ┘
 │   │
 │   ├── media/                      yave_media : FFmpeg
 │   │   ├── FFmpegRaii.h            AVFrame/AVPacket/AVCodecContext の unique_ptr Deleter
@@ -125,13 +138,18 @@ YetAnotherVideoEditor/
 │   │       └── VttParser.h / .cpp
 │   │
 │   ├── ai/                         yave_ai
-│   │   ├── AiGenerationParams.h / .cpp
 │   │   ├── AiGenerationTask.h / .cpp
 │   │   ├── AiGenerationOrchestrator.h / .cpp
 │   │   ├── IGenerationProvider.h
 │   │   ├── ProviderRegistry.h / .cpp
 │   │   ├── GenerationCache.h / .cpp
 │   │   ├── ReferenceFrameExtractor.h / .cpp  I2V/V2V の参照フレーム取り出し
+│   │   ├── ParamCascade.h / .cpp        Bible→トラック→カット→出力 の 4 段マージ
+│   │   ├── CutPromptComposer.h / .cpp   構造化フィールド -> プロンプト文字列
+│   │   ├── RoleTrackResolver.h / .cpp   出力役割 -> 配置先トラックの解決 (冪等)
+│   │   ├── StoryboardBatchJob.h / .cpp  依存 DAG による一括生成
+│   │   ├── StoryboardPlanner.h / .cpp   L1: 自然言語 -> カット列のリクエスト
+│   │   ├── StoryboardPlanParser.h / .cpp  L1 応答の検証 (信頼できない入力として扱う)
 │   │   └── providers/
 │   │       ├── OnnxLocalProvider.h / .cpp
 │   │       ├── RemoteHttpProvider.h / .cpp
@@ -186,12 +204,15 @@ YetAnotherVideoEditor/
 │   │   │   ├── EditController.h / .cpp
 │   │   │   ├── PlaybackController.h / .cpp
 │   │   │   ├── AiController.h / .cpp
+│   │   │   ├── StoryboardController.h / .cpp  AIトラック。L1/バッチ/ボード (13.11.6)
 │   │   │   └── PluginController.h / .cpp
 │   │   ├── models/
 │   │   │   ├── TimelineModel.h / .cpp     QAbstractItemModel
 │   │   │   ├── TrackListModel.h / .cpp
 │   │   │   ├── ClipListModel.h / .cpp
 │   │   │   ├── EffectStackModel.h / .cpp
+│   │   │   ├── SelectionModel.h / .cpp    選択状態。永続化も Undo もしない (13.5)
+│   │   │   ├── CutListModel.h / .cpp      ボードビュー用
 │   │   │   └── ParameterModel.h / .cpp    parameterSchema -> UI 自動生成
 │   │   ├── items/
 │   │   │   └── PreviewItem.h / .cpp       QQuickRhiItem 派生のプレビュー表示
@@ -202,6 +223,7 @@ YetAnotherVideoEditor/
 │   │       │   ├── TrackHeader.qml
 │   │       │   ├── ClipItem.qml
 │   │       │   ├── SubtitleClipItem.qml
+│   │       │   ├── CutClipItem.qml        AIトラック上のカット表示 (13.11.3)
 │   │       │   └── Ruler.qml
 │   │       ├── inspector/
 │   │       │   ├── InspectorPanel.qml
@@ -210,7 +232,12 @@ YetAnotherVideoEditor/
 │   │       │   └── AutoParameterForm.qml  ParameterSchema からの自動生成
 │   │       ├── ai/
 │   │       │   ├── AiGenerateDialog.qml
-│   │       │   └── AiTaskListPanel.qml
+│   │       │   ├── AiTaskListPanel.qml
+│   │       │   ├── StoryboardBoardPanel.qml   絵コンテのカード一覧 (13.11.1)
+│   │       │   ├── CutInspector.qml           カットの構造化フィールド編集
+│   │       │   ├── StoryBibleEditor.qml
+│   │       │   ├── StoryboardPlanDialog.qml   L1 の要求入力と差分プレビュー
+│   │       │   └── BatchGenerateDialog.qml    見積り表示と送信同意
 │   │       └── common/
 │   │           ├── Theme.qml
 │   │           └── IconButton.qml
@@ -226,6 +253,10 @@ YetAnotherVideoEditor/
 │   └── yave_en.ts
 │
 ├── resources/
+│   ├── ai/
+│   │   ├── storyboard_plan.schema.json  L1 の契約スキーマ (13.7.2)
+│   │   ├── prompt_templates.json        役割ごとの既定テンプレート
+│   │   └── camera_phrases.json          カメラワーク -> 英語フレーズ (翻訳経路に載せない)
 │   ├── icons/
 │   ├── fonts/
 │   └── yave.qrc
@@ -248,9 +279,18 @@ YetAnotherVideoEditor/
     ├── tst_srtparser.cpp
     ├── tst_projectserializer.cpp
     ├── tst_delaycompensator.cpp
+    ├── tst_cutclip.cpp             CutClip 往復 / specHash の除外集合 (13.13)
+    ├── tst_cutcascade.cpp          4 段マージ / provenance / 継承リセット
+    ├── tst_roletrackresolver.cpp   冪等性 / Z 配置の決定性
+    ├── tst_batchdag.cpp            トポロジカルソート / dirtiness の伝播
+    ├── tst_storyboardplan.cpp      L1 応答の検証 (敵対的入力を含む)
+    ├── tst_promptcomposer.cpp
+    ├── tst_selectionmodel.cpp
     └── data/
         ├── sample.srt
-        └── sample_project.yave
+        ├── sample_project.yave
+        ├── storyboard_plan_valid.json
+        └── storyboard_plan_hostile.json
 ```
 
 ## 2.2 モジュール依存関係
@@ -275,6 +315,14 @@ yave_sdk (INTERFACE) : 誰にも依存しない。yave_subtitle と外部プラ�
   音声処理ノードにも字幕エフェクトにもなり得るため。逆方向の依存は作らない
   (`yave_subtitle` は `ISubtitleEffect` インタフェースだけを知っていて、
   それを誰がロードするかは知らない)。
+- **AI の純データ型は `yave_core` に置く** (`src/core/ai/AiGenerationParams.h`)。
+  `AiPlaceholderClip` と `CutClip` はどちらも `src/core/` にありながら
+  `AiGenerationParams` を保持するため、これを `yave_ai` に置いたままでは
+  `yave_core -> yave_ai` の逆依存が生じる。
+  純データ型は `TimeRange` / `Rational` / Qt Core にしか依存しないので、
+  移しても「GPU 無し CI で走る」性質は失われない。
+  `yave_ai` にはオーケストレータ / プロバイダ / キャッシュ / タスク /
+  バッチ / プランナが残る。経緯は [13.14.3](13-ai-track.md)。
 
 ## 2.3 命名規約
 

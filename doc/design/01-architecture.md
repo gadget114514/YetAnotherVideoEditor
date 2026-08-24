@@ -19,7 +19,8 @@
 +-----------------------------------------------------------------------+
 |  Controller Layer  (QObject)                                           |
 |    ProjectController   EditController   PlaybackController             |
-|    AiController        PluginController LanguageManager                |
+|    AiController        StoryboardController  PluginController          |
+|    LanguageManager                                                     |
 |    TimelineModel (QAbstractItemModel : QML へのブリッジ)                |
 +-----------------------------------------------------------------------+
                     | 直接呼び出し (非 QObject / 純粋 C++)
@@ -66,10 +67,13 @@
    +---+--------------+---------------+---------------+---------------------+
        |              |               |               |
        v              v               v               v
-  +---------+   +-----------+   +-----------+   +--------------+
-  | Track   |   |  Track    |   |  Track    |   |   Track      |
-  | Video   |   |  Audio    |   |  Subtitle |   |  AiGenerated |
-  +----+----+   +-----+-----+   +-----+-----+   +------+-------+
+  +---------+   +-----------+   +-----------+   +--------------+   +-------------+
+  | Track   |   |  Track    |   |  Track    |   |   Track      |   |   Track     |
+  | Video   |   |  Audio    |   |  Subtitle |   |  AiGenerated |   | Storyboard  |
+  +----+----+   +-----+-----+   +-----+-----+   +------+-------+   +------+------+
+                                                                          |
+                                                            CutClip (演出指示。13章)
+                                                            合成に参加しない
        |              |               |                |
    std::vector<std::shared_ptr<Clip>> clips_ (開始時刻でソート済み)
        |              |               |                |
@@ -103,8 +107,13 @@
 
   ---------- AI 生成 経路 ------------------------------------------------
 
+  StoryboardController --> StoryboardBatchJob     (13章: カット群を依存順に投入)
+        |                        |
+        |  RoleTrackResolver     |  ParamCascade / CutPromptComposer
+        |  (役割 -> 配置先トラック) |  (Bible -> トラック -> カット -> 出力)
+        v                        v
   AiController --> AiGenerationOrchestrator
-                        |  (QThreadPool / QFuture)
+                        |  (実行レーンごとの QThreadPool / QFuture)
                         +--> AiGenerationTask (Queued->Running->Cached)
                                   |
                                   +--> IGenerationProvider
@@ -120,6 +129,7 @@
                                   |
                                   v
                               Timeline へクリップ挿入
+                              (cutRef があれば OutputBinding へ結果を書き戻す)
 
 
   ---------- プラグイン 経路 ----------------------------------------------
@@ -154,7 +164,12 @@
    (プレーンな POD グラフ) のみを読む。グラフ差し替えは RCU 方式のポインタ交換。
 
  [AI Worker Pool] ----------------------------------------------------------
-   QThreadPool (既定 2 スレッド)。ONNX 推論 / HTTP 通信 / ffmpeg サブ処理。
+   実行レーンごとに QThreadPool を分ける (7.4.3 / 13.6.4)。
+     LocalGpu = 1                       ONNX / ローカル推論。VRAM のため 1 本
+     LocalCpu = max(1, cores / 2)       前処理 / 後処理 / ffmpeg サブ処理
+     Remote   = 6                       HTTP 通信。エンドポイント毎に追加制限
+     Sidecar  = 1 (設定可)              子プロセス IPC
+   優先度は Interactive > Batch。単発生成がバッチの後ろで飢えないようにする。
    完了通知は queued connection で UI スレッドへ。
 
  [Plugin GUI Thread] -------------------------------------------------------

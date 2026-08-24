@@ -801,9 +801,12 @@ int64_t int64FromJsonString(const QJsonValue& v, int64_t fallback)
 // ===========================================================================
 QJsonObject ProjectSerializer::serializeProject(const Project& p, const SaveOptions& o)
 {
-    QJsonObject root;
+    // ルートにも未知フィールド保持を効かせる (9.11.2)。
+    // schemaVersion 2 で storyBible を追加したため、これが無いと
+    // 古いビルドで開いて保存した瞬間に作品設定が消える。
+    QJsonObject root = p.unknownRootFields();
 
-    root[kSchemaVersion] = kCurrentSchemaVersion;
+    root[kSchemaVersion] = kCurrentSchemaVersion;   // 2 (13章で AIトラックを追加)
 
     QJsonObject app;
     app[QStringLiteral("name")]    = QStringLiteral("YAVE");
@@ -832,10 +835,15 @@ QJsonObject ProjectSerializer::serializeProject(const Project& p, const SaveOpti
     root[kAssets] = serializeAssets(p, o);
     root[QStringLiteral("subtitleStylePresets")] = serializeSubtitleStylePresets(p);
 
+    // ---- 作品設定 (AIトラックのプロンプトへカスケードする。13.3.4) ----
+    root[kStoryBible] = p.storyBible().toJson();
+
     // ---- ★ 無限レイヤー: Track の動的リスト ----
     root[kTracks] = serializeTracks(*p.timeline(), o);
 
     // ---- AI タスク ----
+    // Cached / Committed かつ生きた OutputBinding から参照されているものだけを書く。
+    // 全部書くと再生成のたびにレコードが積み上がり、サイズ予算を破る (9.5.2)。
     root[kAiTasks] = serializeAiTasks(p);
 
     // ---- マスター / 設定 ----
@@ -876,11 +884,13 @@ QJsonArray ProjectSerializer::serializeTracks(const Timeline& tl, const SaveOpti
 
 QJsonObject ProjectSerializer::serializeTrack(const Track& t, const SaveOptions& o)
 {
-    QJsonObject obj;
+    // Clip と同様、認識できなかったフィールドを先に入れて既知フィールドで上書きする。
+    // TrackType::Unknown のトラックは、これによって原文がそのまま保存される (9.11.2)。
+    QJsonObject obj = t.unknownFields();
 
     obj[kTrackId]      = uuidToJson(t.id());
     obj[kTrackName]    = t.name();
-    obj[kTrackType]    = enumToString(t.type());          // "video" / "audio" / ...
+    obj[kTrackType]    = enumToString(t.type());          // "video" / "audio" / "storyboard" / ...
     obj[kTrackVisible] = t.isVisible();
     obj[kTrackLocked]  = t.isLocked();
 
@@ -903,7 +913,20 @@ QJsonObject ProjectSerializer::serializeTrack(const Track& t, const SaveOptions&
     case TrackType::Subtitle:
         obj[QStringLiteral("defaultStylePresetId")] = t.defaultStylePresetId();
         break;
+    case TrackType::Storyboard:
+    case TrackType::Unknown:
+        // 合成にもオーディオグラフにも参加しないため、固有フィールドは持たない
+        break;
     }
+
+    // ---- AIトラック関連 (13章)。全トラック型で任意 ----
+    if (!o.omitDefaultValues || !t.aiRole().isEmpty())
+        obj[kAiRole] = t.aiRole();
+    obj[kStoryboardTrackId] = t.storyboardTrackId().isNull()
+                            ? QJsonValue(QJsonValue::Null)
+                            : QJsonValue(uuidToJson(t.storyboardTrackId()));
+    if (!t.roleDefaultsPatch().isEmpty())
+        obj[kRoleDefaults] = t.roleDefaultsPatch();
 
     // ---- クリップ配列 (時刻順) ----
     QJsonArray clips;
@@ -993,6 +1016,13 @@ QJsonObject ProjectSerializer::serializeClip(const Clip& c, const SaveOptions& o
     case ClipType::Color: {
         const auto& cc = static_cast<const ColorClip&>(c);
         obj[QStringLiteral("color")] = cc.color().name(QColor::HexArgb);
+        break;
+    }
+
+    case ClipType::Cut: {
+        // 演出指示 (13章)。フィールド数が多いので CutClip 自身に任せる。
+        const auto& cut = static_cast<const CutClip&>(c);
+        mergeInto(obj, cut.toJson());
         break;
     }
     }
@@ -1294,9 +1324,14 @@ void ProjectSerializer::deserializeTracks(Timeline* tl, const QJsonArray& arr,
 std::unique_ptr<Track> ProjectSerializer::deserializeTrack(const QJsonObject& o,
                                                            Project* p, LoadResult* r)
 {
-    const TrackType type = enumFromString<TrackType>(o[kTrackType].toString(),
-                                                     TrackType::Video);
+    // TrackType だけは既定フォールバックを使わない。
+    // 未知の型を Video に落とすと、新種のトラックが別の意味で合成に混ざる (9.9.2)。
+    const TrackType type = parseTrackType(o[kTrackType].toString());   // 未知なら Unknown
     auto track = std::make_unique<Track>(type);
+    if (type == TrackType::Unknown) {
+        r->warnings.append(QObject::tr("Unknown track type '%1' was preserved read-only.")
+                               .arg(o[kTrackType].toString()));
+    }
 
     const QUuid id = uuidFromJson(o[kTrackId]);
     track->setId(id.isNull() ? QUuid::createUuid() : id);
@@ -1324,7 +1359,15 @@ std::unique_ptr<Track> ProjectSerializer::deserializeTrack(const QJsonObject& o,
         track->setDefaultStylePresetId(
             o[QStringLiteral("defaultStylePresetId")].toString(QStringLiteral("default")));
         break;
+    case TrackType::Storyboard:
+    case TrackType::Unknown:
+        break;
     }
+
+    // ---- AIトラック関連 (13章) ----
+    track->setAiRole(o[kAiRole].toString());
+    track->setStoryboardTrackId(uuidFromJson(o[kStoryboardTrackId]));
+    track->setRoleDefaultsPatch(o[kRoleDefaults].toObject());
 
     // ---- クリップ配列 ----
     const QJsonArray clips = o[kClips].toArray();
@@ -1365,6 +1408,7 @@ std::shared_ptr<Clip> ProjectSerializer::deserializeClip(const QJsonObject& o,
     case ClipType::Subtitle:      return deserializeSubtitleClip(o, p, r);
     case ClipType::AiPlaceholder: clip = std::make_shared<AiPlaceholderClip>(); break;
     case ClipType::Color:         clip = std::make_shared<ColorClip>();         break;
+    case ClipType::Cut:           return CutClip::fromJson(o);                  // 13章
     }
     if (!clip) return nullptr;
 

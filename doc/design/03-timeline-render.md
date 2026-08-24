@@ -159,7 +159,7 @@ std::vector<std::shared_ptr<Clip>> Track::clipsIn(const TimeRange& r) const
 ### 3.2.4 トラックの種別と互換性
 
 ```cpp
-enum class TrackType { Video, Audio, Subtitle, AiGenerated };
+enum class TrackType { Video, Audio, Subtitle, AiGenerated, Storyboard, Unknown };
 ```
 
 | TrackType | 受け入れる Clip | 合成への参加 |
@@ -168,13 +168,33 @@ enum class TrackType { Video, Audio, Subtitle, AiGenerated };
 | `Audio` | `AudioClip` / `AiPlaceholderClip`(audio系) | オーディオグラフへ |
 | `Subtitle` | `SubtitleClip` | 映像レイヤーとして合成 (最前面寄りに置くのが慣例だが強制しない) |
 | `AiGenerated` | 上記すべて | 生成結果の種別に応じて映像 or 音声 |
+| `Storyboard` | `CutClip` **のみ** | **参加しない** (演出指示。[13章](13-ai-track.md)) |
+| `Unknown` | 何も受け入れない | 参加しない (未知スキーマの保全用。[9.9](09-project-io.md)) |
 
 `AiGenerated` トラックは「生成物であることを UI 上で区別する」ためのマーカーであり、
 振る舞いは中身のクリップ型で決まる。生成完了後にユーザーが普通の Video トラックへ
 ドラッグ移動することもできる。
 
+`Storyboard` トラック (**AIトラック**) はこれとは対照的に、振る舞いを持つトラックである。
+載るのはメディアではなく**カット単位の演出指示** (`CutClip`) であり、
+生成すると必要な出力トラックを解決・新規作成してそちらへ実クリップを配置する。
+詳細は [13章](13-ai-track.md)。
+
+> **なぜ `AiGenerated` を再利用しないか**: 同じ enum 値に「マーカー」と「演出指示」の
+> 2 つの意味を持たせると、`acceptsClip()` と `buildSnapshot()` の両方が
+> 「どちらの AiGenerated か」を判別する必要が生じ、上記のマーカー規則が静かに壊れる。
+
 > **`Track::acceptsClip(const Clip&)` で受け入れ可否を判定**し、UI のドラッグ&ドロップは
-> これを見てドロップ可否のフィードバックを出す。
+> これを見てドロップ可否のフィードバックを出す。`CutClip` は `Storyboard` トラック**だけ**が
+> 受け入れ、`Storyboard` トラックは `CutClip` **だけ**を受け入れる (全トラック型の中で唯一の
+> 排他的な受け入れ規則)。
+
+合成 / オーディオグラフへの参加可否は enum の直接比較ではなく述語で問い合わせる。
+
+```cpp
+bool Track::participatesInComposite() const;   // Video / Subtitle / AiGenerated(映像系)
+bool Track::participatesInAudioGraph() const;  // Audio / AiGenerated(音声系)
+```
 
 ### 3.2.5 トラック並び替え
 
@@ -219,7 +239,18 @@ struct LayerItem
     std::variant<std::monostate,
                  VideoSourceRef,               // assetId + sourceFrameIndex
                  SubtitleRenderRef,            // subtitle clip id + progress
-                 GeneratedSourceRef>  source;
+                 GeneratedSourceRef,
+                 PlaceholderCardRef>  source;  // 生成中 / 未生成カットのカード表示
+};
+
+/// 実素材がまだ無いレイヤーの代替表示。
+/// AiPlaceholderClip (生成中) と CutClip (アニマティック時の未生成カット) が使う。
+struct PlaceholderCardRef
+{
+    QString titleText;        // 「カット 12 (未生成)」/ 「生成中 78%」
+    QString bodyText;         // プロンプト先頭 / セリフ抜粋
+    double  progress = -1.0;  // 0 未満なら進捗バーを描かない
+    QColor  accent;           // 状態色
 };
 
 struct RenderSnapshot
@@ -248,7 +279,8 @@ RenderSnapshot Timeline::buildSnapshot(int64_t frame) const
 
     int z = 0;
     for (const auto& track : tracks_) {          // index 0 = 最背面
-        if (!track->isVisible() || track->type() == TrackType::Audio) { ++z; continue; }
+        // Audio / Storyboard / Unknown はここで落ちる。enum を直接比較しないこと
+        if (!track->isVisible() || !track->participatesInComposite()) { ++z; continue; }
         auto clip = track->clipAt(frame);
         if (!clip) { ++z; continue; }
         snap.layers.push_back(clip->makeLayerItem(frame, z, *track));
@@ -528,6 +560,12 @@ public:
 ここで `RenderSnapshot` をコピーする。それ以外では Timeline に触れない。
 
 ## 3.8 編集操作の実装 (代表例)
+
+> **選択状態は `Timeline` が持たない。** どのクリップ / トラック / 区間が選択されているかは
+> UI 層の関心事であり、`SelectionModel` (Controller 層) が保持する。
+> Undo の対象にもプロジェクト JSON の保存対象にもしない。定義は [13.5](13-ai-track.md)。
+> 永続するカーソル状態は `playhead` と `workRange` だけである。
+
 
 すべて `QUndoCommand` 派生。ここでは代表的な 3 つの挙動を定義する。
 
