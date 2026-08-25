@@ -220,7 +220,7 @@ YetAnotherVideoEditor/
 │   │   └── qml/
 │   │       ├── MainWindow.qml              ドックエリア + タブ構成のシェル (1.7)
 │   │       ├── panels/
-│   │       │   ├── PanelRegistry.qml       タブ可能な 7 パネルの定義表 (1.7.1)
+│   │       │   ├── PanelRegistry.qml       タブ可能な 9 パネルの定義表 (1.7.1)
 │   │       │   ├── DockArea.qml            1 エリア = 1 タブグループ
 │   │       │   ├── MediaLibraryPanel.qml
 │   │       │   ├── FileBrowserPanel.qml
@@ -241,8 +241,8 @@ YetAnotherVideoEditor/
 │   │       │   └── AutoParameterForm.qml  ParameterSchema からの自動生成
 │   │       ├── ai/
 │   │       │   ├── AiGenerateDialog.qml
-│   │       │   ├── AiTaskListPanel.qml
-│   │       │   ├── StoryboardBoardPanel.qml   絵コンテのカード一覧 (13.11.1)
+│   │       │   ├── AiTaskListPanel.qml        タブ可能パネル `aiTasks` (1.7.1)
+│   │       │   ├── StoryboardBoardPanel.qml   絵コンテのカード一覧 (13.11.1)。タブ可能パネル `storyboardBoard`
 │   │       │   ├── CutInspector.qml           カットの構造化フィールド編集
 │   │       │   ├── StoryBibleEditor.qml
 │   │       │   ├── StoryboardPlanDialog.qml   L1 の要求入力と差分プレビュー

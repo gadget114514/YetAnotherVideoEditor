@@ -12,7 +12,7 @@
 ```
 +-----------------------------------------------------------------------+
 |  Presentation Layer                                                    |
-|    QML (Preview 固定 + ドッキング/タブ可能な 7 パネル -- 1.7)            |
+|    QML (Preview 固定 + ドッキング/タブ可能な 9 パネル -- 1.7)            |
 |    QWidget (PluginWindow のみ -- ネイティブ埋め込みが必要なため)         |
 +-----------------------------------------------------------------------+
                     | Q_PROPERTY / Q_INVOKABLE / signals
@@ -346,7 +346,7 @@ main()
 `MainWindow.qml` はドックエリアの集合として構成する。ユーザーがドック位置を変更でき、
 **同一ドックエリアに複数入れた場合はタブグループになる**。
 
-タブとして設定可能なパネルは以下の **7 種類に限定**する。この一覧が唯一の正であり、
+タブとして設定可能なパネルは以下の **9 種類に限定**する。この一覧が唯一の正であり、
 ここにないビューはタブ化の対象にしない。
 
 | パネル ID (永続化キー) | 表示名 (ja / en) | 内容 | QML |
@@ -358,13 +358,15 @@ main()
 | `transitions` | トランジション / Transitions | 利用可能なトランジション一覧。タイムラインへドラッグして適用 | `panels/TransitionPanel.qml` |
 | `effects` | 効果 / Effects | 映像 / オーディオ / 字幕エフェクトの一覧 (プラグイン由来を含む) | `panels/EffectPanel.qml` |
 | `timeline` | タイムライン / Timeline | タイムライン編集ビュー | `timeline/TimelineView.qml` |
+| `aiTasks` | AI タスク一覧 / AI Tasks | AI 生成タスクの進捗・エラー・取り消し。バッチ単位でグループ化 ([13.11.5](13-ai-track.md)) | `ai/AiTaskListPanel.qml` |
+| `storyboardBoard` | 絵コンテボード / Storyboard | AIトラックのカットを絵コンテ表として一覧・編集 ([13.11.1](13-ai-track.md)) | `ai/StoryboardBoardPanel.qml` |
 
 タブ化の対象外となる主なビュー:
 
 | ビュー | 扱い |
 |---|---|
 | プレビュー | 常時表示の固定領域。閉じることもタブへ入れることもできない (再生の主目的であるため) |
-| AI タスク一覧 (`AiTaskListPanel.qml`)、絵コンテボード (`StoryboardBoardPanel.qml`) | [13章](13-ai-track.md) の専用ビュー。上記 7 種とは別枠の切り替え領域に出す |
+| カットインスペクタ (`CutInspector.qml`) / 字幕インスペクタ (`SubtitleInspector.qml`) | 独立パネルにせず、選択対象に応じて `inspector` パネル内へ出し分ける |
 | 各種ダイアログ (`AiGenerateDialog` / `StoryboardPlanDialog` / `BatchGenerateDialog` ほか) | モーダル / モードレスのウィンドウ |
 | プラグイン窓 | `QWidget` によるネイティブ埋め込み ([8章](08-plugin-host.md))。QML のドック体系に載せない |
 
@@ -375,7 +377,7 @@ main()
 | インスタンスは 1 パネル 1 個 | 同じパネルを 2 箇所に同時に置くことはできない。既に開いているパネルを再度開く操作は、そのパネルへのフォーカス移動として扱う |
 | 配置先 | 左 / 右 / 下 / 中央 の各ドックエリア、またはフローティングウィンドウ |
 | タブ化 | 同一ドックエリアに 2 つ以上入れると自動的にタブグループになる。タブ順はドラッグで入れ替えられる |
-| 閉じる | 7 種すべて閉じられる。**タイムラインも閉じられる**。復帰は「表示」メニュー(パネル ID ごとのチェック項目)から行う |
+| 閉じる | 9 種すべて閉じられる。**タイムラインも閉じられる**。復帰は「表示」メニュー(パネル ID ごとのチェック項目)から行う |
 | パネル ID | 永続化キーであり翻訳しない。表示名のみ `qsTr()` を通す ([10章](10-i18n.md)) |
 | 最小サイズ | 各パネルは `minimumWidth` / `minimumHeight` を持ち、ドックエリアの縮小はそれを下限とする |
 
@@ -411,7 +413,7 @@ ui/layout/closed            … 閉じているパネル ID の配列
 |---|---|
 | 左 | `mediaLibrary` / `fileBrowser` (タブグループ、既定は `mediaLibrary`) |
 | 中央 | プレビュー (固定領域) |
-| 右 | `inspector` / `effects` / `transitions` (タブグループ、既定は `inspector`) |
-| 下 | `timeline` / `console` (タブグループ、既定は `timeline`) |
+| 右 | `inspector` / `effects` / `transitions` / `aiTasks` (タブグループ、既定は `inspector`) |
+| 下 | `timeline` / `storyboardBoard` / `console` (タブグループ、既定は `timeline`) |
 
 「表示 > レイアウトを既定に戻す」で、`ui/layout/*` を破棄してこの構成へ復帰できる。
