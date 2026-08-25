@@ -205,7 +205,8 @@ YetAnotherVideoEditor/
 │   │   │   ├── PlaybackController.h / .cpp
 │   │   │   ├── AiController.h / .cpp
 │   │   │   ├── StoryboardController.h / .cpp  AIトラック。L1/バッチ/ボード (13.11.6)
-│   │   │   └── PluginController.h / .cpp
+│   │   │   ├── PluginController.h / .cpp
+│   │   │   └── PanelLayoutController.h / .cpp  ドック/タブ配置の永続化 (1.7.3)
 │   │   ├── models/
 │   │   │   ├── TimelineModel.h / .cpp     QAbstractItemModel
 │   │   │   ├── TrackListModel.h / .cpp
@@ -217,7 +218,15 @@ YetAnotherVideoEditor/
 │   │   ├── items/
 │   │   │   └── PreviewItem.h / .cpp       QQuickRhiItem 派生のプレビュー表示
 │   │   └── qml/
-│   │       ├── MainWindow.qml
+│   │       ├── MainWindow.qml              ドックエリア + タブ構成のシェル (1.7)
+│   │       ├── panels/
+│   │       │   ├── PanelRegistry.qml       タブ可能な 7 パネルの定義表 (1.7.1)
+│   │       │   ├── DockArea.qml            1 エリア = 1 タブグループ
+│   │       │   ├── MediaLibraryPanel.qml
+│   │       │   ├── FileBrowserPanel.qml
+│   │       │   ├── ConsolePanel.qml
+│   │       │   ├── TransitionPanel.qml
+│   │       │   └── EffectPanel.qml
 │   │       ├── timeline/
 │   │       │   ├── TimelineView.qml
 │   │       │   ├── TrackHeader.qml

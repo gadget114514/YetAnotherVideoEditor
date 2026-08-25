@@ -12,7 +12,7 @@
 ```
 +-----------------------------------------------------------------------+
 |  Presentation Layer                                                    |
-|    QML (Timeline / Preview / Inspector / Library)                      |
+|    QML (Preview 固定 + ドッキング/タブ可能な 7 パネル -- 1.7)            |
 |    QWidget (PluginWindow のみ -- ネイティブ埋め込みが必要なため)         |
 +-----------------------------------------------------------------------+
                     | Q_PROPERTY / Q_INVOKABLE / signals
@@ -20,7 +20,7 @@
 |  Controller Layer  (QObject)                                           |
 |    ProjectController   EditController   PlaybackController             |
 |    AiController        StoryboardController  PluginController          |
-|    LanguageManager                                                     |
+|    LanguageManager     PanelLayoutController (1.7.3)                   |
 |    TimelineModel (QAbstractItemModel : QML へのブリッジ)                |
 +-----------------------------------------------------------------------+
                     | 直接呼び出し (非 QObject / 純粋 C++)
@@ -338,3 +338,80 @@ main()
 
 > 1 を最優先にする理由: オーディオ RT スレッドは `AudioRenderGraph` 経由で VST3 プラグインの
 > `process()` を呼んでいる。プラグインを先に unload すると RT スレッドが解放済み関数を呼ぶ。
+
+## 1.7 UI パネル構成 (ドッキング / タブ)
+
+### 1.7.1 タブとして設定可能なパネル
+
+`MainWindow.qml` はドックエリアの集合として構成する。ユーザーがドック位置を変更でき、
+**同一ドックエリアに複数入れた場合はタブグループになる**。
+
+タブとして設定可能なパネルは以下の **7 種類に限定**する。この一覧が唯一の正であり、
+ここにないビューはタブ化の対象にしない。
+
+| パネル ID (永続化キー) | 表示名 (ja / en) | 内容 | QML |
+|---|---|---|---|
+| `mediaLibrary` | メディアライブラリ / Media Library | プロジェクトへ取り込み済みのアセット一覧。サムネイル・使用箇所・オフライン検出 | `panels/MediaLibraryPanel.qml` |
+| `fileBrowser` | ファイルブラウザ / File Browser | ファイルシステムを直接辿る。未取り込み素材のプレビューと取り込み | `panels/FileBrowserPanel.qml` |
+| `console` | コンソール / Console | `QLoggingCategory` のカテゴリ別ログ、AI 生成・プラグインの警告/エラー | `panels/ConsolePanel.qml` |
+| `inspector` | インスペクタ / Inspector | 選択中のクリップ / トラック / エフェクトのパラメータ編集 | `inspector/InspectorPanel.qml` |
+| `transitions` | トランジション / Transitions | 利用可能なトランジション一覧。タイムラインへドラッグして適用 | `panels/TransitionPanel.qml` |
+| `effects` | 効果 / Effects | 映像 / オーディオ / 字幕エフェクトの一覧 (プラグイン由来を含む) | `panels/EffectPanel.qml` |
+| `timeline` | タイムライン / Timeline | タイムライン編集ビュー | `timeline/TimelineView.qml` |
+
+タブ化の対象外となる主なビュー:
+
+| ビュー | 扱い |
+|---|---|
+| プレビュー | 常時表示の固定領域。閉じることもタブへ入れることもできない (再生の主目的であるため) |
+| AI タスク一覧 (`AiTaskListPanel.qml`)、絵コンテボード (`StoryboardBoardPanel.qml`) | [13章](13-ai-track.md) の専用ビュー。上記 7 種とは別枠の切り替え領域に出す |
+| 各種ダイアログ (`AiGenerateDialog` / `StoryboardPlanDialog` / `BatchGenerateDialog` ほか) | モーダル / モードレスのウィンドウ |
+| プラグイン窓 | `QWidget` によるネイティブ埋め込み ([8章](08-plugin-host.md))。QML のドック体系に載せない |
+
+### 1.7.2 ドッキングとタブの規則
+
+| 規則 | 内容 |
+|---|---|
+| インスタンスは 1 パネル 1 個 | 同じパネルを 2 箇所に同時に置くことはできない。既に開いているパネルを再度開く操作は、そのパネルへのフォーカス移動として扱う |
+| 配置先 | 左 / 右 / 下 / 中央 の各ドックエリア、またはフローティングウィンドウ |
+| タブ化 | 同一ドックエリアに 2 つ以上入れると自動的にタブグループになる。タブ順はドラッグで入れ替えられる |
+| 閉じる | 7 種すべて閉じられる。**タイムラインも閉じられる**。復帰は「表示」メニュー(パネル ID ごとのチェック項目)から行う |
+| パネル ID | 永続化キーであり翻訳しない。表示名のみ `qsTr()` を通す ([10章](10-i18n.md)) |
+| 最小サイズ | 各パネルは `minimumWidth` / `minimumHeight` を持ち、ドックエリアの縮小はそれを下限とする |
+
+> **タイムラインをタブ扱いにする理由**: 絵コンテ作業やアセット整理の局面では、
+> タイムラインより一覧系パネルを広く使いたい。タイムラインだけを固定領域にすると
+> 「畳めるが消せない」中途半端な状態が残り、他パネルと規則が二重化する。
+
+### 1.7.3 レイアウトの永続化
+
+パネル配置・タブ構成・各ドックエリアのサイズは、**アプリケーション固有の設定
+(`QSettings` の `ui/layout/*`) に保存し、プロジェクト JSON には含めない**。
+永続化と復元は `PanelLayoutController` が担当する。
+
+> **理由**: プロジェクトファイルは Windows / macOS 間で持ち運ぶ ([design.md §3.4](../design.md))。
+> 画面解像度もマルチモニタ構成も異なる環境へ UI 配置を持ち込むと、パネルが画面外に出る等の
+> 復元不能な状態を生む。UI 状態はマシン側の属性であってプロジェクトの属性ではない。
+
+保存キーの形は次のとおり。未知のパネル ID (将来の追加・削除) は読み込み時に無視し、
+既定レイアウトの値で補う。
+
+```
+ui/layout/version           … レイアウトスキーマ版。不一致なら既定レイアウトへフォールバック
+ui/layout/docks/<area>      … そのエリアに入るパネル ID の配列 (タブ順)
+ui/layout/docks/<area>/size … エリアのピクセルサイズ
+ui/layout/active/<area>     … タブグループ内でアクティブなパネル ID
+ui/layout/floating/<panelId>… フローティング時のジオメトリ
+ui/layout/closed            … 閉じているパネル ID の配列
+```
+
+### 1.7.4 既定レイアウト
+
+| ドックエリア | パネル |
+|---|---|
+| 左 | `mediaLibrary` / `fileBrowser` (タブグループ、既定は `mediaLibrary`) |
+| 中央 | プレビュー (固定領域) |
+| 右 | `inspector` / `effects` / `transitions` (タブグループ、既定は `inspector`) |
+| 下 | `timeline` / `console` (タブグループ、既定は `timeline`) |
+
+「表示 > レイアウトを既定に戻す」で、`ui/layout/*` を破棄してこの構成へ復帰できる。
