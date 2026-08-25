@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "application": { "name": "YAVE", "version": "1.0.0" },
+  "savedAt": "2026-08-24T15:04:05Z",
+
+  "project": {
+    "name": "Sample Project",
+    "timebase": { "num": 1001, "den": 60000 },
+    "canvasSize": { "width": 3840, "height": 2160 },
+    "sampleRate": 48000,
+    "channels": 2,
+    "duration": 108000,
+    "playhead": 3600,
+    "workRange": { "start": 0, "duration": 108000 },
+    "colorSpace": "bt709"
+  },
+
+  "assets": [],
+
+  "subtitleStylePresets": [
+    {
+      "id": "default",
+      "name": "Default",
+      "style": { "fontFamily": "Noto Sans JP", "fontPointSize": 48.0 }
+    }
+  ],
+
+  "tracks": [
+    {
+      "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "name": "Background",
+      "type": "video",
+      "visible": true,
+      "locked": false,
+      "height": 64,
+      "color": "#3a5f8a",
+      "clips": [
+        {
+          "id": "c0010000-0000-0000-0000-000000000000",
+          "type": "video",
+          "range": { "start": 0, "duration": 1800 },
+          "assetId": null,
+          "sourceOffset": 300,
+          "speed": 1.0,
+          "fadeOut": 15,
+          "blendMode": "normal"
+        }
+      ]
+    },
+    {
+      "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "name": "Narration",
+      "type": "audio",
+      "gain": 0.8,
+      "pan": 0.0,
+      "muted": false,
+      "solo": false,
+      "clips": [
+        {
+          "id": "c0020000-0000-0000-0000-000000000000",
+          "type": "audio",
+          "range": { "start": 0, "duration": 2400 },
+          "assetId": null,
+          "sourceOffset": 0,
+          "gain": 1.0,
+          "pan": 0.0
+        }
+      ]
+    },
+    {
+      "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "name": "Subtitles JA",
+      "type": "subtitle",
+      "visible": true,
+      "defaultStylePresetId": "default",
+      "clips": [
+        {
+          "id": "c0030000-0000-0000-0000-000000000000",
+          "type": "subtitle",
+          "range": { "start": 120, "duration": 180 },
+          "stylePresetId": "default",
+          "text": {
+            "plain": "これは字幕のテキストです。\n2 行目もあります。",
+            "spans": [
+              {
+                "start": 4,
+                "length": 2,
+                "bold": true,
+                "color": "#ffcc00"
+              }
+            ]
+          },
+          "effectStack": [
+            {
+              "instanceId": "e0010000-0000-0000-0000-000000000000",
+              "effectId": "yave.fade",
+              "enabled": true,
+              "params": {
+                "inDuration": 0.3,
+                "outDuration": 0.3,
+                "curve": 1
+              }
+            }
+          ],
+          "wordTimings": []
+        }
+      ]
+    }
+  ],
+
+  "aiTasks": [],
+  "markers": [],
+  "masterAudio": { "gain": 1.0, "effectChain": [] },
+  "settings": {
+    "pdcEnabled": true,
+    "proxyEnabled": true,
+    "autoCommitAi": false
+  }
+}

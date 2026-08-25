@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "win-mingw",
+      "displayName": "Windows (MinGW, Qt bundled)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "C:/Qt/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "C:/Qt/Tools/mingw1310_64/bin/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "C:/Qt/Tools/Ninja/ninja.exe",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.11.2/mingw_64"
+      }
+    },
+    {
+      "name": "win-msvc",
+      "displayName": "Windows (Visual Studio 2022, x64)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {}
+    },
+    {
+      "name": "mac-qt",
+      "displayName": "macOS (Homebrew Qt6)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "YAVE_ENABLE_AVIUTL": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "win-mingw", "configurePreset": "win-mingw" },
+    { "name": "win-msvc", "configurePreset": "win-msvc" },
+    { "name": "mac-qt", "configurePreset": "mac-qt" }
+  ],
+  "testPresets": [
+    { "name": "win-mingw", "configurePreset": "win-mingw", "output": { "outputOnFailure": true } },
+    { "name": "win-msvc", "configurePreset": "win-msvc", "output": { "outputOnFailure": true } },
+    { "name": "mac-qt", "configurePreset": "mac-qt", "output": { "outputOnFailure": true } }
+  ]
+}

@@ -1,0 +1,20 @@
+#pragma once
+
+#include <QLoggingCategory>
+
+Q_DECLARE_LOGGING_CATEGORY(lcCore)
+Q_DECLARE_LOGGING_CATEGORY(lcMedia)
+Q_DECLARE_LOGGING_CATEGORY(lcRender)
+Q_DECLARE_LOGGING_CATEGORY(lcAudio)
+Q_DECLARE_LOGGING_CATEGORY(lcSubtitle)
+Q_DECLARE_LOGGING_CATEGORY(lcAi)
+Q_DECLARE_LOGGING_CATEGORY(lcPlugin)
+Q_DECLARE_LOGGING_CATEGORY(lcIo)
+Q_DECLARE_LOGGING_CATEGORY(lcI18n)
+Q_DECLARE_LOGGING_CATEGORY(lcApp)
+
+namespace yave::diag {
+
+void registerLoggingCategories();
+
+} // namespace yave::diag

@@ -1,0 +1,8 @@
+{
+  "name": "yave",
+  "version-string": "1.0.0",
+  "description": "YetAnotherVideoEditor - cross platform nonlinear video editor",
+  "dependencies": [
+    { "name": "ffmpeg", "features": ["nvcodec", "qsv"] }
+  ]
+}

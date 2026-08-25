@@ -1,0 +1,54 @@
+set(YAVE_CORE_SOURCES
+    Rational.h
+    Rational.cpp
+    TimeRange.h
+    BlendMode.h
+    TrackType.h
+    RenderSnapshot.h
+    RenderSnapshot.cpp
+    Clip.h
+    Clip.cpp
+    VideoFilter.h
+    VideoFilter.cpp
+    Transition.h
+    Transition.cpp
+    VideoClip.h
+    VideoClip.cpp
+    AudioClip.h
+    AudioClip.cpp
+    ColorClip.h
+    ColorClip.cpp
+    AiPlaceholderClip.h
+    AiPlaceholderClip.cpp
+    IAudioEffectNode.h
+    AssetLibrary.h
+    AssetLibrary.cpp
+    Track.h
+    Track.cpp
+    Timeline.h
+    Timeline.cpp
+    Project.h
+    Project.cpp
+
+    commands/UndoCommandBase.h
+    commands/UndoCommandBase.cpp
+    commands/AddTrackCommand.h
+    commands/AddTrackCommand.cpp
+    commands/AddClipCommand.h
+    commands/AddClipCommand.cpp
+    commands/SplitClipCommand.h
+    commands/SplitClipCommand.cpp
+    commands/ImportSubtitleCommand.h
+    commands/ImportSubtitleCommand.cpp
+    commands/FilterCommands.h
+    commands/FilterCommands.cpp
+    commands/TransitionCommands.h
+    commands/TransitionCommands.cpp
+    commands/CommitGeneratedAssetCommand.h
+    commands/CommitGeneratedAssetCommand.cpp
+)
+
+add_library(yave_core STATIC ${YAVE_CORE_SOURCES})
+yave_apply_common_settings(yave_core)
+target_link_libraries(yave_core
+    PUBLIC Qt6::Core Qt6::Gui yave_util)

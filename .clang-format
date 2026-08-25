@@ -1,0 +1,16 @@
+BasedOnStyle: LLVM
+Standard: c++17
+IndentWidth: 4
+ColumnLimit: 110
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+PointerAlignment: Left
+AlwaysBreakTemplateDeclarations: Yes
+SortIncludes: CaseSensitive
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<Q'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
