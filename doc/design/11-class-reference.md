@@ -813,7 +813,11 @@ private:
     Vst3Registry*           vst3_       = nullptr;
     SubtitleEffectRegistry* subtitleFx_ = nullptr;
     AviUtlRegistry*         aviutl_     = nullptr;   // 非 Windows では常に nullptr
-    mutable QMutex          mutex_;
+    // 再帰ロック。scanSync() はロックを保持したまま searchPaths() /
+    // subtitleEffectPrototype() / isBlacklisted() / blacklist() を呼ぶ。
+    // 非再帰の QMutex では起動シーケンス (1.5) の途中で自己デッドロックし、
+    // MainWindow.qml のロードまで到達しない。
+    mutable QRecursiveMutex mutex_;
 };
 
 } // namespace yave::plugin
@@ -2061,16 +2065,256 @@ signals:
 
 ---
 
-## 11.17 クラス間の所有関係まとめ
+## 11.17 core/VideoFilter.h / core/Transition.h
+
+```cpp
+#pragma once
+
+#include <QJsonObject>
+#include <QString>
+#include <QUuid>
+#include <QVariantMap>
+
+#include <cstdint>
+
+namespace yave {
+
+/// クリップに積むビデオフィルタ 1 段 (3.9)。
+///
+/// SubtitleEffectInstance と違い、プラグインのインスタンスを所有しない。
+/// 組み込みフィルタはシェーダで完結し、状態を持たないためである。
+struct VideoFilterInstance
+{
+    QString     filterId;            ///< "yave.filter.blur" / "aviutl:<nativeId>"
+    QVariantMap params;              ///< parameterSchema に沿った値
+    bool        enabled = true;
+
+    QJsonObject toJson() const;
+    static VideoFilterInstance fromJson(const QJsonObject& o);
+};
+
+/// クリップ境界に置くトランジション (3.10)。
+///
+/// クリップ同士は重ねない。Track が境界ごとに 0 個か 1 個だけ持つ。
+struct Transition
+{
+    QUuid       id;
+    QString     transitionId;        ///< "yave.trans.dissolve" 等
+    QUuid       fromClipId;
+    QUuid       toClipId;            ///< 端の境界では null (黒との合成)
+    int64_t     centerFrame    = 0;  ///< 境界フレーム
+    int64_t     durationFrames = 0;  ///< 全体長。前後へ半分ずつ伸びる
+    QVariantMap params;
+
+    int64_t startFrame() const { return centerFrame - durationFrames / 2; }
+    int64_t endFrame()   const { return startFrame() + durationFrames; }
+    bool    contains(int64_t f) const { return f >= startFrame() && f < endFrame(); }
+
+    /// 0 = from が全面、1 = to が全面
+    float progressAt(int64_t f) const;
+
+    QJsonObject toJson() const;
+    static Transition fromJson(const QJsonObject& o);
+};
+
+} // namespace yave
+```
+
+`Clip` / `Track` 側に追加する API は次のとおり ([11.1](#111-coreclip-h) / [11.2](#112-coretrackh) の続き)。
+
+```cpp
+// Clip に追加 (全クリップ共通の合成属性として)
+const std::vector<VideoFilterInstance>& filters() const;
+void addFilter(VideoFilterInstance inst);
+void insertFilter(int index, VideoFilterInstance inst);
+void removeFilter(int index);
+void moveFilter(int from, int to);
+void setFilterEnabled(int index, bool enabled);
+
+// Track に追加
+const std::vector<Transition>& transitions() const;
+const Transition* transitionAt(int64_t frame) const;         ///< 無ければ nullptr
+const Transition* transitionAtBoundary(int64_t frame) const;
+bool  addTransition(Transition t, QString* errorOut = nullptr);  ///< 不変条件 4/5 を検証
+void  removeTransition(const QUuid& id);
+void  dropOrphanTransitions();          ///< クリップの移動 / 削除後に呼ぶ
+int64_t maxTransitionDuration(int64_t boundaryFrame) const;   ///< ハンドルから決まる上限
+```
+
+## 11.18 core/TitleClip.h
+
+```cpp
+#pragma once
+
+#include "../subtitle/SubtitleClip.h"
+
+namespace yave {
+
+/// タイトル / テロップ (3.11)。
+///
+/// 描画は SubtitleClip と完全に同じ経路を通る。違うのは
+///   - 映像トラックにも置けること
+///   - 書き出し時に字幕トラックとして分離されないこと
+///   - 生成元のプリセット ID を覚えていること
+/// の 3 点だけである。
+class TitleClip final : public SubtitleClip
+{
+public:
+    ClipType type() const override { return ClipType::Title; }
+    std::shared_ptr<Clip> clone() const override;
+
+    QString presetId() const { return presetId_; }
+    void    setPresetId(const QString& id) { presetId_ = id; }
+
+    /// プリセット (yave.title.center 等) の既定スタイルとテキストを適用する。
+    void applyPreset(const QString& presetId);
+
+private:
+    QString presetId_;
+};
+
+} // namespace yave
+```
+
+## 11.19 app/library/LibraryStore.h
+
+ライブラリパネル ([1.7.5](01-architecture.md)) のデータ層。QML からは 2 つのモデル越しにのみ触る。
+
+```cpp
+#pragma once
+
+#include <QHash>
+#include <QObject>
+#include <QUuid>
+
+#include <vector>
+
+namespace yave { class Project; }
+
+namespace yave::app {
+
+enum class LibraryCategory { Media, Transition, Title, Subtitle, Filter, Effect };
+
+struct LibraryFolder
+{
+    QUuid   id;
+    QUuid   parentId;            ///< null ならカテゴリ直下
+    QString name;
+};
+
+struct LibraryItem
+{
+    QString         itemId;      ///< メディアはアセット UUID、他は "yave.trans.dissolve" 等
+    LibraryCategory category = LibraryCategory::Media;
+    QString         name;        ///< 表示名 (組み込みは翻訳キー)
+    QUuid           folderId;    ///< null ならカテゴリ直下
+    QUuid           assetId;     ///< Media のみ
+    QString         iconOverride;///< ユーザーが割り当てたアイコンの絶対パス
+    bool            builtin = false;
+    int64_t         durationFrames = 0;   ///< Media のみ
+};
+
+/// 6 カテゴリのフォルダ木とアイテムを一元管理する。
+///
+/// 供給元が異なるもの (AssetLibrary / 組み込みテーブル / PluginManager) を
+/// 1 つの形にそろえるのがこのクラスの役目。永続化先はカテゴリで分かれる:
+///   Media           -> プロジェクト JSON の library セクション (9.2.1)
+///   それ以外の 5 種  -> QSettings ui/library/*
+class LibraryStore : public QObject
+{
+    Q_OBJECT
+public:
+    static LibraryStore& instance();
+
+    void setProject(Project* project);       ///< Media カテゴリの供給元を差し替える
+
+    // ---- 参照 ----
+    std::vector<LibraryFolder> folders(LibraryCategory cat, const QUuid& parentId) const;
+    std::vector<LibraryItem>   items(LibraryCategory cat, const QUuid& folderId) const;
+    const LibraryItem*         item(const QString& itemId) const;
+
+    // ---- フォルダ操作 (1.7.5) ----
+    QUuid createFolder(LibraryCategory cat, const QUuid& parentId, const QString& name);
+    bool  renameFolder(const QUuid& folderId, const QString& newName);
+    /// 中のアイテムとサブフォルダは親へ繰り上げる。アイテム自体は消さない。
+    bool  removeFolder(const QUuid& folderId);
+    bool  moveItems(const std::vector<QString>& itemIds, const QUuid& toFolderId);
+    bool  moveFolder(const QUuid& folderId, const QUuid& toParentId);
+
+    // ---- アイコン ----
+    void    setItemIcon(const QString& itemId, const QString& absolutePath);
+    void    clearItemIcon(const QString& itemId);
+    QString resolveIcon(const QString& itemId) const;    ///< 1.7.5 の解決順序
+
+signals:
+    void foldersChanged(int category);
+    void itemsChanged(int category);
+    void iconChanged(const QString& itemId);
+
+private:
+    LibraryStore();
+    void rebuildCatalog();        ///< 組み込み + プラグイン由来のアイテムを作り直す
+    void loadSettings();
+    void saveSettings() const;
+
+    Project* project_ = nullptr;
+    QHash<int, std::vector<LibraryFolder>> folders_;   ///< category -> folders
+    QHash<QString, LibraryItem>            items_;     ///< itemId -> item
+};
+
+} // namespace yave::app
+```
+
+### 11.19.1 app/models/LibraryTreeModel.h / LibraryItemsModel.h
+
+```cpp
+/// フォルダツリー。ルートはそのパネルが担当するカテゴリ (1.7.5 の担当表)。
+class LibraryTreeModel : public QAbstractItemModel
+{
+    Q_OBJECT
+    Q_PROPERTY(QStringList categories READ categories WRITE setCategories NOTIFY categoriesChanged)
+public:
+    enum Roles { NameRole = Qt::UserRole + 1, FolderIdRole, CategoryRole,
+                 IsCategoryRootRole, CanRenameRole };
+
+    Q_INVOKABLE QModelIndex createFolder(const QModelIndex& parent, const QString& name);
+    Q_INVOKABLE bool        renameFolder(const QModelIndex& index, const QString& name);
+    Q_INVOKABLE bool        removeFolder(const QModelIndex& index);
+    Q_INVOKABLE bool        dropItems(const QModelIndex& folderIndex, const QStringList& itemIds);
+};
+
+/// 選択中フォルダの中身。GridView / ListView の両方がこれ 1 つを見る。
+class LibraryItemsModel : public QAbstractListModel
+{
+    Q_OBJECT
+    Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterTextChanged)
+public:
+    enum Roles { ItemIdRole = Qt::UserRole + 1, NameRole, KindRole, IconSourceRole,
+                 DurationRole, DetailTextRole, DroppableRole, DragPayloadRole };
+
+    Q_INVOKABLE void    setCurrentFolder(int category, const QUuid& folderId);
+    /// D&D 用の JSON。{category,itemId,assetId,name} (1.7.5)
+    Q_INVOKABLE QString dragPayload(int row) const;
+};
+```
+
+> `IconSourceRole` は [1.7.5](01-architecture.md) の解決順序を適用済みの URL を返す。
+> 動画 / 画像アセットでは `image://yave-thumb/<assetId>` になり、
+> `ThumbnailImageProvider` (`QQuickAsyncImageProvider` 派生) が `DecodeWorkerPool` 上で
+> 生成する。**UI スレッドではデコードしない**。
+
+## 11.20 クラス間の所有関係まとめ
 
 ```
 Project (所有)
  ├── Timeline (unique_ptr)
  │     └── std::vector<std::unique_ptr<Track>>       ← 無限レイヤー
- │           └── std::vector<std::shared_ptr<Clip>>
- │                 └── SubtitleClip
- │                       └── std::vector<SubtitleEffectInstance>
- │                             └── ISubtitleEffect*  (Registry 所有。ここは弱参照)
+ │           ├── std::vector<std::shared_ptr<Clip>>
+ │           │     ├── std::vector<VideoFilterInstance>  ← 3.9。状態を持たない値
+ │           │     └── SubtitleClip / TitleClip
+ │           │           └── std::vector<SubtitleEffectInstance>
+ │           │                 └── ISubtitleEffect*  (Registry 所有。ここは弱参照)
+ │           └── std::vector<Transition>                 ← 3.10。境界に付く値
  ├── AssetLibrary (unique_ptr)
  ├── QUndoStack (unique_ptr)
  │     └── QUndoCommand (Undo 用に Clip の shared_ptr を保持しうる)
@@ -2086,6 +2330,12 @@ EditController (Controller 層, 所有)
 StoryboardController (Controller 層, 所有)
  ├── CutListModel                                     ← ボードビュー用
  └── StoryboardBatchJob (unique_ptr)                  ← 13.6。Orchestrator の上位
+
+LibraryStore (singleton, 所有)                         ← 1.7.5
+ ├── フォルダ木 (カテゴリごと)
+ └── LibraryItem のテーブル
+       ├── Media  … AssetLibrary を参照するだけ (所有しない)
+       └── その他 … 組み込みテーブル / PluginManager 由来 (所有しない)
 
 PluginManager (singleton, 所有)
  ├── Vst3Registry

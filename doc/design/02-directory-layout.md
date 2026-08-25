@@ -45,6 +45,9 @@ YetAnotherVideoEditor/
 │   │   ├── VideoClip.h / .cpp
 │   │   ├── AudioClip.h / .cpp
 │   │   ├── AiPlaceholderClip.h / .cpp
+│   │   ├── TitleClip.h / .cpp      タイトル/テロップ。SubtitleClip 派生 (3.11)
+│   │   ├── VideoFilter.h           クリップのビデオフィルタ 1 段 (3.9)
+│   │   ├── Transition.h            クリップ境界のトランジション (3.10)
 │   │   ├── CutClip.h / .cpp        AIトラックの 1 区間 = 演出指示 (13章)
 │   │   ├── StoryBible.h / .cpp     キャラ/ロケ/画風。プロンプトへカスケードする
 │   │   ├── Track.h / .cpp
@@ -63,6 +66,12 @@ YetAnotherVideoEditor/
 │   │       ├── TrimClipCommand.h
 │   │       ├── SplitClipCommand.h
 │   │       ├── ImportSubtitleCommand.h
+│   │       ├── AddFilterCommand.h              ┐
+│   │       ├── RemoveFilterCommand.h           │
+│   │       ├── ReorderFilterCommand.h          ├ 3.9 / 3.10
+│   │       ├── AddTransitionCommand.h          │
+│   │       ├── RemoveTransitionCommand.h       │
+│   │       ├── AddSubtitleEffectCommand.h      ┘
 │   │       ├── CommitGeneratedAssetCommand.h
 │   │       ├── AddCutCommand.h                 ┐
 │   │       ├── RemoveCutCommand.h              │
@@ -94,11 +103,16 @@ YetAnotherVideoEditor/
 │   │   ├── TexturePool.h / .cpp
 │   │   ├── BlendMode.h
 │   │   ├── LayerPass.h / .cpp      1 レイヤー分の描画パス
+│   │   ├── FilterPass.h / .cpp     ビデオフィルタの適用 (3.9)
+│   │   ├── TransitionPass.h / .cpp 境界トランジションの合成 (3.10)
 │   │   ├── ColorSpace.h / .cpp     YUV->RGB 行列、HDR トーンマップ
 │   │   └── shaders/
 │   │       ├── fullscreen.vert
 │   │       ├── layer_blend.frag    ブレンドモード分岐を含む
 │   │       ├── yuv_to_rgb.frag
+│   │       ├── filter_color.frag   輝度/コントラスト/彩度/ガンマ/色行列
+│   │       ├── filter_blur.frag    分離ガウシアン (2 パス)
+│   │       ├── transition.frag     dissolve / wipe / slide / push を mode で分岐
 │   │       └── subtitle_glyph.vert / .frag   インスタンシング描画用
 │   │
 │   ├── audio/                      yave_audio
@@ -207,6 +221,8 @@ YetAnotherVideoEditor/
 │   │   │   ├── StoryboardController.h / .cpp  AIトラック。L1/バッチ/ボード (13.11.6)
 │   │   │   ├── PluginController.h / .cpp
 │   │   │   └── PanelLayoutController.h / .cpp  ドック/タブ配置の永続化 (1.7.3)
+│   │   ├── library/
+│   │   │   └── LibraryStore.h / .cpp      6 カテゴリのフォルダ木とアイテム (1.7.5)
 │   │   ├── models/
 │   │   │   ├── TimelineModel.h / .cpp     QAbstractItemModel
 │   │   │   ├── TrackListModel.h / .cpp
@@ -214,19 +230,31 @@ YetAnotherVideoEditor/
 │   │   │   ├── EffectStackModel.h / .cpp
 │   │   │   ├── SelectionModel.h / .cpp    選択状態。永続化も Undo もしない (13.5)
 │   │   │   ├── CutListModel.h / .cpp      ボードビュー用
+│   │   │   ├── LibraryTreeModel.h / .cpp  ライブラリのフォルダツリー (11.19.1)
+│   │   │   ├── LibraryItemsModel.h / .cpp 選択フォルダの中身
 │   │   │   └── ParameterModel.h / .cpp    parameterSchema -> UI 自動生成
 │   │   ├── items/
-│   │   │   └── PreviewItem.h / .cpp       QQuickRhiItem 派生のプレビュー表示
+│   │   │   ├── PreviewItem.h / .cpp       QQuickRhiItem 派生のプレビュー表示
+│   │   │   └── ThumbnailImageProvider.h / .cpp
+│   │   │                                  image://yave-thumb/<assetId> (1.7.5)
 │   │   └── qml/
 │   │       ├── MainWindow.qml              ドックエリア + タブ構成のシェル (1.7)
 │   │       ├── panels/
-│   │       │   ├── PanelRegistry.qml       タブ可能な 9 パネルの定義表 (1.7.1)
+│   │       │   ├── PanelRegistry.qml       タブ可能な 8 パネルの定義表 (1.7.1)
 │   │       │   ├── DockArea.qml            1 エリア = 1 タブグループ
-│   │       │   ├── MediaLibraryPanel.qml
 │   │       │   ├── FileBrowserPanel.qml
-│   │       │   ├── ConsolePanel.qml
-│   │       │   ├── TransitionPanel.qml
-│   │       │   └── EffectPanel.qml
+│   │       │   └── ConsolePanel.qml
+│   │       ├── library/                    mediaLibrary / effectLibrary の共通実装 (1.7.5)
+│   │       │   ├── LibraryPanel.qml        担当カテゴリを変えて 2 インスタンス使う
+│   │       │   ├── LibraryTree.qml         フォルダツリー。作成/改名/削除/移動
+│   │       │   ├── LibraryItemView.qml     一覧/小アイコン/大アイコン/詳細 の 4 モード
+│   │       │   ├── LibraryItemDelegate.qml アイテム 1 個。ドラッグ元
+│   │       │   ├── LibraryIcon.qml         アイコン解決 (上書き -> サムネ -> 組み込み)
+│   │       │   └── LibraryToolbar.qml      表示モード / アイコンサイズ / 検索
+│   │       ├── icons/                      組み込み SVG (qt_add_qml_module RESOURCES)
+│   │       │   ├── cat_media.svg / cat_transition.svg / cat_title.svg
+│   │       │   ├── cat_subtitle.svg / cat_filter.svg / cat_effect.svg
+│   │       │   └── kind_video.svg / kind_audio.svg / kind_image.svg / folder.svg
 │   │       ├── timeline/
 │   │       │   ├── TimelineView.qml
 │   │       │   ├── TrackHeader.qml

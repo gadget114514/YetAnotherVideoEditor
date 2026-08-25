@@ -124,6 +124,12 @@ class Track
 2. 同一トラック内のクリップの `TimeRange` は互いに重ならない。
    - 重ねたい場合はトラックを分ける。これが「無限レイヤー」を前提にできる設計上の強み。
 3. すべてのクリップの `duration > 0`。
+4. `transitions_` の各要素は、**隣接する 2 クリップの境界にのみ**置かれる
+   (`from` の終端 == `to` の始端)。1 つの境界に 2 つ以上は置けない。
+   - トランジションはクリップを重ねずに実現する ([3.10](#310-トランジション))。
+     2 と両立させるための設計であり、[13.14.7](13-ai-track.md) の A/B ロール規定とも矛盾しない。
+5. トランジションの長さは、**両側のクリップが持つハンドル**
+   (`maxDuration()` に対するソースの残り尺) の 2 倍を超えない。
 
 ### 3.2.3 クリップ検索
 
@@ -235,12 +241,36 @@ struct LayerItem
     QMatrix4x4       transform;                // レイヤー変換 (位置/拡縮/回転)
     QRectF           cropRect;                 // 0..1 正規化
 
+    // このレイヤーに掛けるビデオフィルタ (3.9)。適用順は配列順。
+    std::vector<ResolvedFilter>   filters;
+
+    // 境界のトランジションに参加している場合のみ値を持つ (3.10)
+    std::optional<TransitionRef>  transition;
+
     // 種別ごとの解決済み情報 (Render Thread がここから直接要求を出せるようにする)
     std::variant<std::monostate,
                  VideoSourceRef,               // assetId + sourceFrameIndex
                  SubtitleRenderRef,            // subtitle clip id + progress
                  GeneratedSourceRef,
                  PlaceholderCardRef>  source;  // 生成中 / 未生成カットのカード表示
+};
+
+/// フィルタ 1 段分の解決済みパラメータ。
+/// Render Thread へ QVariantMap を渡さないため、ここで固定長の float 配列に潰す。
+/// パラメータの意味はフィルタ ID ごとに 3.9 の表で定める。
+struct ResolvedFilter
+{
+    QString                filterId;   // "yave.filter.colorAdjust" 等
+    std::array<float, 8>   params{};
+};
+
+/// トランジションに参加しているレイヤーの情報。
+/// 同じ境界の 2 レイヤーが、同一の id / progress を持って必ず対で現れる。
+struct TransitionRef
+{
+    QString transitionId;         // "yave.trans.dissolve" 等
+    float   progress = 0.0f;      // 0 = from が全面、1 = to が全面
+    bool    isIncoming = false;   // true なら自分が to 側
 };
 
 /// 実素材がまだ無いレイヤーの代替表示。
@@ -281,6 +311,17 @@ RenderSnapshot Timeline::buildSnapshot(int64_t frame) const
     for (const auto& track : tracks_) {          // index 0 = 最背面
         // Audio / Storyboard / Unknown はここで落ちる。enum を直接比較しないこと
         if (!track->isVisible() || !track->participatesInComposite()) { ++z; continue; }
+        // トランジション区間なら、前後 2 クリップを 2 レイヤーとして出す (3.10)。
+        // クリップ自体は重なっていないので、不変条件 2 は破っていない。
+        if (const auto* tr = track->transitionAt(frame)) {
+            snap.layers.push_back(track->clipById(tr->fromClipId)
+                                      ->makeLayerItem(frame, z, *track, *tr, /*incoming=*/false));
+            snap.layers.push_back(track->clipById(tr->toClipId)
+                                      ->makeLayerItem(frame, z, *track, *tr, /*incoming=*/true));
+            ++z;
+            continue;
+        }
+
         auto clip = track->clipAt(frame);
         if (!clip) { ++z; continue; }
         snap.layers.push_back(clip->makeLayerItem(frame, z, *track));
@@ -289,6 +330,9 @@ RenderSnapshot Timeline::buildSnapshot(int64_t frame) const
     return snap;
 }
 ```
+
+> トランジション中の 2 レイヤーは**同じ zIndex** を持つ。合成側はこの対を 1 つの
+> レイヤーとして扱い、`TransitionPass` で 1 枚に潰してから背面の結果へ重ねる (3.4.1)。
 
 コスト見積り: トラック 20 本で 20 回の二分探索 + 数百バイトのコピー。1 フレームあたり数マイクロ秒。
 
@@ -321,6 +365,12 @@ RenderSnapshot Timeline::buildSnapshot(int64_t frame) const
    (3) COMPOSITE  (offscreen RT へ)
         compositeRt を canvasSize でクリア (透明黒)
         for layer in snapshot.layers:            // 背面 -> 前面
+            if layer.filters:                    // 3.9
+                FilterPass::apply(cb, layer.filters, scratchRt)
+                  - TexturePool から借りたスクラッチ RT へ段数分 ping-pong
+            if layer.transition:                 // 3.10
+                同じ zIndex の対をまとめて TransitionPass::blend(cb, from, to, ref)
+                  - 結果 1 枚を以降の layer として扱う
             LayerPass::draw(cb, layer, compositeRt)
               - 頂点: フルスクリーン三角形 (2 頂点キャッシュ)
               - 変換とブレンドモードは uniform で渡す
@@ -625,3 +675,146 @@ void RippleDeleteCommand::redo()
 候補は `std::vector<int64_t>` に集めてソートし、`std::lower_bound` で最寄りを探す。
 吸着閾値はピクセル単位 (既定 8px) をフレーム数に換算して使う
 (ズームレベルによらず操作感を一定にするため)。
+
+## 3.9 クリップのビデオフィルタースタック
+
+### 3.9.1 データ構造
+
+フィルタは**クリップの属性**として持つ。`opacity` / `transform` / `cropRect` と同じ
+「合成のしかたを決める値」の一員であり、`Clip` 基底に置く。
+
+```cpp
+// src/core/VideoFilter.h
+struct VideoFilterInstance
+{
+    QString     filterId;          // "yave.filter.blur" 等
+    QVariantMap params;            // parameterSchema に沿った値
+    bool        enabled = true;
+};
+```
+
+```cpp
+// src/core/Clip.h (抜粋)
+const std::vector<VideoFilterInstance>& filters() const;
+void addFilter(VideoFilterInstance inst);
+void insertFilter(int index, VideoFilterInstance inst);
+void removeFilter(int index);
+void moveFilter(int from, int to);
+void setFilterEnabled(int index, bool enabled);
+```
+
+> **トラックではなくクリップに置く理由**: 「この 1 カットだけ色を寄せる」が編集中の
+> 大多数のケースであり、トラック単位だと必ずトラックを増やす操作が要る。
+> トラック全体に掛けたい場合は、既存のオーディオ側と同じくトラックの
+> エフェクトチェーンで扱う (将来拡張。本章の対象外)。
+
+### 3.9.2 組み込みフィルタ
+
+`ResolvedFilter::params` の各スロットの意味はフィルタ ID ごとに固定する。
+未使用スロットは 0 とし、シェーダ側も 0 を「無効」として読む。
+
+| フィルタ ID | params[0..] | シェーダ |
+|---|---|---|
+| `yave.filter.colorAdjust` | 0: 輝度 (-1..1) / 1: コントラスト (0..2) / 2: 彩度 (0..2) / 3: ガンマ (0.1..4) | `filter_color.frag` |
+| `yave.filter.blur` | 0: 半径 px (0..64) / 1: 方向 (0=両方向, 1=水平, 2=垂直) | `filter_blur.frag` (分離ガウシアン、2 パス) |
+| `yave.filter.mono` | 0: 強度 (0..1) | `filter_color.frag` (彩度 0 への補間) |
+| `yave.filter.sepia` | 0: 強度 (0..1) | `filter_color.frag` (色行列) |
+
+外部プラグイン由来のフィルタ (AviUtl) は本章では扱わない。ホスト側の実装は
+[8章](08-plugin-host.md)、ライブラリでの一覧表示は [1.7.5](01-architecture.md) を参照。
+
+### 3.9.3 適用順序
+
+```
+ソーステクスチャ
+  -> filters[0], filters[1], ... (配列順。無効なものは飛ばす)
+  -> cropRect
+  -> transform
+  -> opacity / blendMode でここまでの合成結果へ重ねる
+```
+
+フィルタは `TexturePool` から借りたスクラッチ RT へ ping-pong で適用する。
+`blur` のように 2 パス必要なフィルタは 1 段で 2 回描く。
+
+> **フレーム予算への影響** ([3.6](#36-4k60p-のフレーム予算)): 4K でのフルスクリーンパスは
+> 1 段あたり約 0.4ms を見込む。1 レイヤーあたり 4 段を超えたら Adaptive Quality
+> ([3.6.1](#361-予算超過時の劣化戦略-adaptive-quality)) の対象とし、
+> **プレビュー時のみ** blur のサンプル数を落とす。書き出しでは常にフル品質で掛ける。
+
+## 3.10 トランジション
+
+### 3.10.1 クリップを重ねずに実現する
+
+トランジションは**クリップ境界に付く別オブジェクト**として `Track` が持つ。
+クリップ同士は重ねない ([3.2.2](#322-トラックの不変条件) の不変条件 2 を維持する)。
+
+```
+        clip A                     clip B
+  |========================|=======================|
+                       ^  ^  ^
+                       |  |  |
+                   center 境界フレーム
+              |<--------->|<--------->|
+                 dur/2        dur/2      ← A/B のハンドルから伸ばす
+```
+
+```cpp
+// src/core/Transition.h
+struct Transition
+{
+    QUuid       id;
+    QString     transitionId;       // "yave.trans.dissolve" 等
+    QUuid       fromClipId;
+    QUuid       toClipId;           // 端の境界では null (黒との合成)
+    int64_t     centerFrame = 0;    // 境界フレーム
+    int64_t     durationFrames = 0; // 全体長。前後へ半分ずつ伸びる
+    QVariantMap params;
+};
+```
+
+> **なぜクリップを重ねないか**: 重なりを許すと「どちらが手前か」「トリムでどちらが縮むか」
+> という状態がトラック内に生まれ、[3.2.3](#323-クリップ検索) の二分探索も、
+> [3.8](#38-編集操作の実装-代表例) の分割・リップル削除も、すべて重なりを考慮した
+> 実装に書き換わる。境界に属する小さなオブジェクトにすれば、影響は
+> 「境界が動いたらトランジションも動く / 消える」の 1 点で済む。
+
+### 3.10.2 組み込みトランジション
+
+| ID | 内容 | params |
+|---|---|---|
+| `yave.trans.dissolve` | クロスディゾルブ | — |
+| `yave.trans.fadeToBlack` | 黒を挟む。相手クリップが無い境界にも置ける | 0: 中間色 |
+| `yave.trans.wipe` | ワイプ | 0: 角度 / 1: ぼかし幅 |
+| `yave.trans.slide` | 新しい絵が押し込む | 0: 方向 |
+| `yave.trans.push` | 古い絵を押し出す | 0: 方向 |
+
+`progress` は `(frame - (center - dur/2)) / dur` を 0..1 にクランプして求める。
+`TransitionPass` は `transitionId` を `mode` uniform に変換し、1 本のシェーダ
+(`transition.frag`) で分岐する。
+
+### 3.10.3 追加時の規則
+
+| 状況 | 動作 |
+|---|---|
+| ライブラリから境界へドロップ | 既定 30 フレームで作る |
+| ハンドルが足りない | 足りる長さまで**自動的に縮める**。0 になる場合は作らず、理由を `console` へ出す |
+| 境界に既にある | 置き換える (Undo 1 回で元へ戻る) |
+| 片側のクリップを削除 / 移動して境界が消えた | そのトランジションも一緒に消す。`Track` の CRUD 側で保証する |
+| オーディオトラック | 本章の対象外。音声のクロスフェードは [5章](05-audio-engine.md) の PDC / ゲイン側で扱う |
+
+## 3.11 タイトルクリップ
+
+タイトルは `TitleClip : public SubtitleClip` (`ClipType::Title`) とする。
+レイアウト・グリフラスタライズ・エフェクトスタックは [6章](06-subtitle-engine.md) の
+実装をそのまま再利用し、スナップショットでも `SubtitleRenderRef` を使う。
+
+| | 字幕 (`SubtitleClip`) | タイトル (`TitleClip`) |
+|---|---|---|
+| 置けるトラック | 字幕トラック | **映像トラック**にも置ける |
+| 主な出自 | SRT 取り込み / AI 生成 | ライブラリのプリセットから手置き |
+| 既定スタイル | 下部センター、字幕用サイズ | プリセット依存 (センター大見出し / 下三分の一 / クレジット) |
+| 書き出し時の字幕トラック分離 | 対象 | 対象外 (映像に焼き込む) |
+
+> **別クラスにする理由**: 描画は同じでも、**書き出し時に字幕トラックとして分離するか
+> どうか**が違う。同じクラスにフラグで持たせると、SRT 書き出しやトラック互換チェック
+> ([3.2.4](#324-トラックの種別と互換性)) のあちこちで「フラグを見る」分岐が増える。

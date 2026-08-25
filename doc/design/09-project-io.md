@@ -30,7 +30,7 @@
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "application": { "name": "YAVE", "version": "1.0.0" },
   "savedAt": "2026-08-24T15:04:05Z",
 
@@ -69,6 +69,14 @@
     }
   ],
 
+  "library": {
+    "folders": [
+      { "id": "f001-...", "parentId": null,      "name": "撮影素材" },
+      { "id": "f002-...", "parentId": "f001-...", "name": "インタビュー" }
+    ],
+    "assignments": { "1f2e3d4c-...": "f002-..." }
+  },
+
   "storyBible": {
     "artStyle": "水彩調のアニメーション、柔らかい光",
     "negativePrompt": "低品質, 文字, 余分な指",
@@ -94,6 +102,23 @@
 }
 ```
 
+### 9.2.1 `library` (メディアのフォルダ構成)
+
+メディアライブラリパネル ([1.7.5](01-architecture.md)) のフォルダ木と、
+アセットがどのフォルダに属するかを持つ。
+
+| キー | 意味 |
+|---|---|
+| `folders[]` | `id` / `parentId` (ルート直下は `null`) / `name` |
+| `assignments` | アセット ID -> フォルダ ID。未登録のアセットはルート直下として扱う |
+
+存在しないフォルダ ID を指す `assignments` の要素は、読み込み時に**黙って捨てる**
+(壊れたフォルダ参照でアセットが一覧から消えるほうが実害が大きい)。
+
+> **エフェクトライブラリ側のフォルダをここに入れない理由**: あちらはアプリが持つ
+> カタログの整理であり、プロジェクトの内容ではない。`QSettings` に置く
+> ([1.7.5](01-architecture.md) の永続化表)。
+
 ## 9.3 トラック配列 (無限レイヤー)
 
 配列の**順序がそのまま Z オーダー**。index 0 が最背面。
@@ -113,6 +138,7 @@
     "height": 64,
     "color": "#3a5f8a",
     "clips": [ /* 9.4 参照 */ ],
+    "transitions": [ /* 9.3.2 参照 */ ],
     "effectChain": []
   },
   {
@@ -211,9 +237,39 @@
 > プロンプト内での参照と L1 モデル出力の照合に使う人間可読キーである。
 > `key` を変えても既存カットの参照は壊れない。
 
+### 9.3.2 `transitions` (クリップ境界のトランジション)
+
+映像トラックのみ。クリップ境界に付く独立オブジェクト ([3.10](03-timeline-render.md))。
+
+```json
+"transitions": [
+  {
+    "id": "t001-...",
+    "transitionId": "yave.trans.dissolve",
+    "fromClipId": "c001-...",
+    "toClipId": "c002-...",
+    "centerFrame": 1800,
+    "duration": 30,
+    "params": {}
+  }
+]
+```
+
+| キー | 意味 |
+|---|---|
+| `fromClipId` / `toClipId` | 境界の前後のクリップ。端の境界では `toClipId` が `null` (黒との合成) |
+| `centerFrame` | 境界フレーム。`fromClipId` の終端 == `toClipId` の始端 |
+| `duration` | 全体長。前後へ半分ずつ伸びる |
+
+読み込み時に**不変条件を検証する** ([3.2.2](03-timeline-render.md) の 4 / 5)。
+参照先クリップが無い / 境界が一致しない / ハンドルが足りない要素は捨て、
+`LoadResult::warnings` へ 1 件ずつ積む。手で編集された JSON を無条件に信じない。
+
 ## 9.4 クリップ
 
 共通フィールド + 型ごとの追加フィールド。
+`filters` ([9.4.1](#941-videoclip)) はすべての映像系クリップ (video / image / color /
+title / aiPlaceholder) が持てる共通フィールドである。
 
 ### 9.4.1 VideoClip
 
@@ -237,10 +293,24 @@
   "crop": { "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 },
   "fadeIn": 0,
   "fadeOut": 15,
-  "effectChain": [ /* AviUtl フィルタ等 */ ],
+  "filters": [
+    { "filterId": "yave.filter.colorAdjust",
+      "enabled": true,
+      "params": { "brightness": 0.05, "contrast": 1.1, "saturation": 1.0, "gamma": 1.0 } },
+    { "filterId": "aviutl:縁取り", "enabled": true, "params": { "size": 4 } }
+  ],
   "generatedByTaskId": null
 }
 ```
+
+`filters` はビデオフィルタースタック ([3.9](03-timeline-render.md))。**配列順が適用順**。
+組み込みフィルタは `yave.filter.*`、プラグイン由来は `<host>:<nativeId>` の形にする。
+
+> **schema v2 の `effectChain` からの改称**: クリップに付くものを `effectChain`、
+> トラックに付くものも `effectChain` と呼んでいたため、どちらの話をしているのか
+> 区別できなかった。クリップ側を `filters` に改め、`effectChain` は
+> **トラック / マスターのオーディオ処理チェーン専用**とする。移行は 9.11 の
+> `migrate_2_to_3` が行う。
 
 ### 9.4.2 AudioClip
 
@@ -443,6 +513,29 @@ AIトラック (`"type":"storyboard"`) にのみ置ける、カット単位の�
 > `paramPatch` / `biblePatch` は**疎なパッチ**である。
 > キーが存在すること自体が「その段で上書きされている」ことを意味し、
 > 「継承に戻す」はキーの削除で表現される ([13.3.5](13-ai-track.md))。
+
+### 9.4.6 TitleClip
+
+`SubtitleClip` ([9.4.3](#943-subtitleclip)) と同じフィールドを持ち、`type` だけが違う。
+差分は次の 2 点のみ。
+
+```json
+{
+  "id": "c006-...",
+  "type": "title",
+  "range": { "start": 600, "duration": 180 },
+  "presetId": "yave.title.center",
+  "text": "第 1 章",
+  "style": { "...": "SubtitleClip と同じ" },
+  "effectStack": [ /* 9.4.3 と同じ */ ],
+  "filters": []
+}
+```
+
+| キー | 意味 |
+|---|---|
+| `presetId` | 生成元のタイトルプリセット。以後の編集で外れても記録として残す |
+| 置けるトラック | 映像トラック。字幕トラックにも置けるが、書き出し時の字幕分離の対象にはならない ([3.11](03-timeline-render.md)) |
 
 ## 9.5 AI タスク
 
@@ -674,6 +767,10 @@ inline constexpr auto kTracks        = "tracks";
 inline constexpr auto kClips         = "clips";
 inline constexpr auto kAiTasks       = "aiTasks";
 inline constexpr auto kAssets        = "assets";
+inline constexpr auto kLibrary       = "library";
+inline constexpr auto kFolders       = "folders";
+inline constexpr auto kAssignments   = "assignments";
+inline constexpr auto kParentId      = "parentId";
 
 // Track
 inline constexpr auto kTrackId       = "id";
@@ -681,7 +778,14 @@ inline constexpr auto kTrackName     = "name";
 inline constexpr auto kTrackType     = "type";
 inline constexpr auto kTrackVisible  = "visible";
 inline constexpr auto kTrackLocked   = "locked";
-inline constexpr auto kEffectChain   = "effectChain";
+inline constexpr auto kEffectChain   = "effectChain";   // トラック / マスターの音声チェーン専用
+inline constexpr auto kTransitions   = "transitions";
+
+// Transition (9.3.2)
+inline constexpr auto kTransitionId  = "transitionId";
+inline constexpr auto kFromClipId    = "fromClipId";
+inline constexpr auto kToClipId      = "toClipId";
+inline constexpr auto kCenterFrame   = "centerFrame";
 
 // Clip
 inline constexpr auto kClipId        = "id";
@@ -691,6 +795,9 @@ inline constexpr auto kRangeStart    = "start";
 inline constexpr auto kRangeDuration = "duration";
 inline constexpr auto kAssetId       = "assetId";
 inline constexpr auto kSourceOffset  = "sourceOffset";
+inline constexpr auto kFilters       = "filters";       // ビデオフィルタースタック (9.4.1)
+inline constexpr auto kFilterId      = "filterId";
+inline constexpr auto kPresetId      = "presetId";      // TitleClip (9.4.6)
 
 // SubtitleClip
 inline constexpr auto kText          = "text";
@@ -702,6 +809,7 @@ inline constexpr auto kEffectStack   = "effectStack";
 inline constexpr auto kWordTimings   = "wordTimings";
 
 // SubtitleEffectInstance
+// kEnabled / kParams は VideoFilterInstance (9.4.1) と共用する
 inline constexpr auto kInstanceId    = "instanceId";
 inline constexpr auto kEffectId      = "effectId";
 inline constexpr auto kPluginId      = "pluginId";
@@ -854,7 +962,7 @@ EnumMap<ai::I2VReferenceMode>::table()
 
 | enum | 文字列 |
 |---|---|
-| `ClipType` | 既存 + `cut` |
+| `ClipType` | 既存 + `cut` + `title` (9.4.6) |
 | `OutputRole` | `mainVideo`, `mainVideoB`, `overlay`, `narration`, `bgm`, `se`, `subtitle`, `mask` |
 | `TrackResolveMode` | `auto`, `existing`, `alwaysNew` |
 | `OutputState` | `notGenerated`, `queued`, `running`, `cached`, `committed`, `failed`, `stale`, `blocked` |
@@ -978,7 +1086,7 @@ inline const std::vector<Migration>& migrations()
 {
     static const std::vector<Migration> table = {
         { 1, &migrate_1_to_2 },     // AIトラック (13 章) の追加
-        // { 2, &migrate_2_to_3 },
+        { 2, &migrate_2_to_3 },     // フィルタ / トランジション / タイトル / ライブラリ
     };
     return table;
 }
@@ -1036,6 +1144,51 @@ void migrate_1_to_2(QJsonObject& root, LoadResult* r)
     Q_UNUSED(r);
 }
 ```
+
+#### migrate_2_to_3 (フィルタ / トランジション / ライブラリの追加)
+
+追加が主だが、クリップの `effectChain` を `filters` へ改称する破壊的変更を含む
+([9.4.1](#941-videoclip))。
+
+```cpp
+void migrate_2_to_3(QJsonObject& root, LoadResult* r)
+{
+    // (1) ライブラリのフォルダ構成を空で用意する
+    if (!root.contains(keys::kLibrary)) {
+        root[keys::kLibrary] = QJsonObject{
+            { keys::kFolders,     QJsonArray{} },
+            { keys::kAssignments, QJsonObject{} } };
+    }
+
+    QJsonArray tracks = root[keys::kTracks].toArray();
+    for (int i = 0; i < tracks.size(); ++i) {
+        QJsonObject t = tracks[i].toObject();
+
+        // (2) トランジション配列を空で用意する
+        if (!t.contains(keys::kTransitions))
+            t[keys::kTransitions] = QJsonArray{};
+
+        // (3) クリップの effectChain -> filters へ移す。
+        //     トラックの effectChain (オーディオ) はそのまま残す。
+        QJsonArray clips = t[keys::kClips].toArray();
+        for (int j = 0; j < clips.size(); ++j) {
+            QJsonObject c = clips[j].toObject();
+            if (c.contains(keys::kEffectChain) && !c.contains(keys::kFilters)) {
+                c[keys::kFilters] = c.take(keys::kEffectChain);
+            }
+            if (!c.contains(keys::kFilters))
+                c[keys::kFilters] = QJsonArray{};
+            clips[j] = c;
+        }
+        t[keys::kClips] = clips;
+        tracks[i] = t;
+    }
+    root[keys::kTracks] = tracks;
+    Q_UNUSED(r);
+}
+```
+
+> v2 には `title` 型のクリップが存在しないため、クリップ型の変換は不要である。
 
 ### 9.11.1 未来のバージョンを開いた場合
 
