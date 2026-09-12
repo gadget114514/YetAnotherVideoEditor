@@ -2,6 +2,7 @@
 
 #include "../../core/Project.h"
 #include "../../core/Timeline.h"
+#include "../audio/AudioSourceCache.h"
 
 namespace yave {
 
@@ -13,6 +14,7 @@ PlaybackController& PlaybackController::instance()
 
 PlaybackController::PlaybackController(QObject* parent)
     : QObject(parent)
+    , sourceCache_(std::make_unique<app::AudioSourceCache>(this))
 {
     connect(&audio::AudioRenderEngine::instance(), &audio::AudioRenderEngine::playbackStateChanged,
             this, &PlaybackController::playbackStateChanged);
@@ -25,6 +27,9 @@ void PlaybackController::attachProject(Project* project)
     project_ = project;
     if (!project_)
         return;
+
+    sourceCache_->setProject(project);
+    audio::AudioRenderEngine::instance().setAudioSourceProvider(sourceCache_.get());
 
     audio::AudioRenderEngine& engine = audio::AudioRenderEngine::instance();
     engine.setTimebase(project_->timebase());
@@ -57,11 +62,16 @@ void PlaybackController::play()
 void PlaybackController::pause()
 {
     audio::AudioRenderEngine::instance().pause();
+    // 停止位置をプロジェクトへ反映 (再開時の play() がここから続く)。
+    if (project_)
+        project_->setPlayhead(audio::AudioRenderEngine::instance().currentFrame());
 }
 
 void PlaybackController::stop()
 {
     audio::AudioRenderEngine::instance().stop();
+    if (project_)
+        project_->setPlayhead(0);
 }
 
 void PlaybackController::seek(qint64 frame)

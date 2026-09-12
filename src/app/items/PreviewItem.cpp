@@ -38,13 +38,19 @@ public:
 
     void render(QRhiCommandBuffer* cb) override
     {
-        Q_UNUSED(cb);
         if (!compositor_)
             return;
-        void* result = compositor_->renderFrame(pendingSnapshot_);
-        Q_UNUSED(result);
-        // 実際の表示は composite 結果を colorTexture へスケール描画する。
-        // 現行ビルドでは合成パイプラインの骨格のみが稼働する。
+
+        // 合成は Scene Graph のフレームで使用中のコマンドバッファ上で行う
+        // (beginOffscreenFrame は使わない。フレームの入れ子になるため)。
+        auto* composite = static_cast<QRhiTexture*>(
+            compositor_->renderFrame(cb, pendingSnapshot_));
+        if (!composite)
+            return;
+
+        // 合成結果をアイテムのカラーテクスチャへ描画して画面に出す (3.4.1 PRESENT)。
+        if (auto* rt = renderTarget())
+            compositor_->present(cb, rt, composite);
     }
 
 private:

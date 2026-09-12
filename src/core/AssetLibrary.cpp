@@ -19,6 +19,9 @@ Asset* AssetLibrary::registerAsset(const QString& absolutePath, Asset::Kind kind
     a.id                   = QUuid::createUuid();
     a.kind                 = kind;
     a.resolvedAbsolutePath = norm;
+    // 取り込み時点ではプロジェクトの保存先が確定しないため絶対パスを入れる。
+    // 相対化できないパスは絶対のまま保存するのが設計 (3.4 / PathResolver)。
+    a.relativePath         = norm;
     a.isMissing            = !QFileInfo::exists(norm);
     return addResolvedAsset(a);
 }

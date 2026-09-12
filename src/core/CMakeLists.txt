@@ -46,6 +46,8 @@ set(YAVE_CORE_SOURCES
     commands/TransitionCommands.cpp
     commands/CommitGeneratedAssetCommand.h
     commands/CommitGeneratedAssetCommand.cpp
+    commands/SetPropertyCommands.h
+    commands/SetPropertyCommands.cpp
 )
 
 add_library(yave_core STATIC ${YAVE_CORE_SOURCES})

@@ -5,7 +5,10 @@
 
 #include <QObject>
 
+#include <memory>
+
 namespace yave {
+namespace app { class AudioSourceCache; }
 
 /// 再生制御。オーディオファースト同期 (5.1) の UI 側エントリポイント。
 ///
@@ -57,6 +60,9 @@ private:
     explicit PlaybackController(QObject* parent = nullptr);
 
     Project* project_ = nullptr;
+
+    /// 音声素材の PCM 供給元 (グラフ構築時に AudioRenderEngine へ渡す)。
+    std::unique_ptr<yave::app::AudioSourceCache> sourceCache_;
 };
 
 } // namespace yave

@@ -139,6 +139,14 @@ public:
         audioClient_->GetBufferSize(&frames);
         bufferFrames_ = int(frames);
 
+        // コールバックへ渡す非インターリーブ (プラナー) スクラッチを事前確保する。
+        // RT スレッド内では確保を行わない。
+        scratchData_.resize(size_t(bufferFrames_) * size_t(channelCount_));
+        scratchPlanar_.resize(size_t(channelCount_));
+        for (int c = 0; c < channelCount_; ++c)
+            scratchPlanar_[size_t(c)] =
+                scratchData_.data() + size_t(c) * size_t(bufferFrames_);
+
         return true;
     }
 
@@ -220,16 +228,28 @@ private:
             if (FAILED(renderClient_->GetBuffer(available, &data)))
                 break;
 
-            float* channels[2] = {reinterpret_cast<float*>(data),
-                                  reinterpret_cast<float*>(data)};
-            // フォーマットが float 相互配置の場合のみ正しい。インターリーブされた
-            // ステレオ float (最も一般的な共有モード形式) を想定し、
-            // コールバックには「非インターリーブに見える」チャンネル配列を渡す代わりに
-            // インターリーブ先頭ポインタを渡す。
-            //
-            // 実運用では de-interleave を scratch バッファで行う。ここでは雛形として
-            // 無音クリアのみを行う (コールバック未実装のフォールバック動作)。
-            std::memset(data, 0, size_t(available) * size_t(channelCount_) * sizeof(float));
+            const int n = std::min(int(available), int(bufferFrames_));
+
+            if (callback_ && n > 0) {
+                // コールバックは「チャンネル配列へのポインタ配列」(プラナー) を要求する。
+                // WASAPI 共有モードのステレオ float (インターリーブ) バッファへ
+                // 変換するために、スクラッチへ書き込んでからコピーする。
+                callback_(scratchPlanar_.data(), channelCount_, n, userData_);
+
+                if (channelCount_ >= 2) {
+                    const float* l = scratchPlanar_[0];
+                    const float* r = scratchPlanar_[1];
+                    for (int i = 0; i < n; ++i) {
+                        data[size_t(i) * 2]       = l[i];
+                        data[size_t(i) * 2 + 1]   = r[i];
+                    }
+                } else {
+                    std::memset(data, 0, size_t(n) * size_t(channelCount_) * sizeof(float));
+                }
+            } else {
+                // コールバック未登録: 無音を書き込む
+                std::memset(data, 0, size_t(n) * size_t(channelCount_) * sizeof(float));
+            }
 
             renderClient_->ReleaseBuffer(available, 0);
         }
@@ -249,6 +269,10 @@ private:
     bool               comInitHere_ = false;
     std::atomic<bool>  running_{false};
     std::thread        thread_;
+
+    // コールバックへ渡すプラナーバッファ (open() で事前確保)
+    std::vector<float>  scratchData_;
+    std::vector<float*> scratchPlanar_;
 };
 
 } // anonymous namespace

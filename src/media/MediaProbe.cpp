@@ -4,6 +4,7 @@
 extern "C" {
 #  include <libavformat/avformat.h>
 #  include <libavutil/error.h>
+#  include <libavutil/mathematics.h>
 }
 #endif
 
@@ -45,15 +46,19 @@ MediaInfo MediaProbe::probe(const QString& filePath)
             if (s->nb_frames > 0)
                 info.durationFrames = int64_t(s->nb_frames);
             else if (s->duration != AV_NOPTS_VALUE && fr.den != 0)
-                info.durationFrames = int64_t(double(s->duration) * double(fr.num)
-                                              / double(fr.den));
+                // s->duration はストリームの time_base 単位なので、fps へ正確に変換する
+                info.durationFrames = av_rescale_q(s->duration, s->time_base,
+                                                   AVRational{fr.num, fr.den});
         } else if (s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !info.hasAudio) {
-            info.hasAudio       = true;
+            info.hasAudio        = true;
             info.audioSampleRate = s->codecpar->sample_rate;
             info.audioChannels   = s->codecpar->ch_layout.nb_channels;
             if (s->duration != AV_NOPTS_VALUE && s->codecpar->sample_rate > 0)
+                // s->duration はストリームの time_base 単位 (WAV では ≈ 1/sr)。
+                // サンプル数へ正確に変換する (従来の ×sample_rate は 44100 倍に膨らんでいた)。
                 info.audioDurationFrames =
-                    int64_t(double(s->duration) * s->codecpar->sample_rate);
+                    av_rescale_q(s->duration, s->time_base,
+                                 AVRational{1, s->codecpar->sample_rate});
         }
     }
 

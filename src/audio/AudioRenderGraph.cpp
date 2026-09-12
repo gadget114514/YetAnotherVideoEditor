@@ -10,7 +10,7 @@
 namespace yave::audio {
 
 std::unique_ptr<AudioRenderGraph> AudioRenderGraphBuilder::build(
-    const Timeline& timeline, const Project& project)
+    const Timeline& timeline, const Project& project, IAudioSourceProvider* sources)
 {
     auto graph = std::make_unique<AudioRenderGraph>();
     graph->sampleRate     = project.sampleRate();
@@ -53,6 +53,20 @@ std::unique_ptr<AudioRenderGraph> AudioRenderGraphBuilder::build(
                 int64_t(double(clip->fadeInFrames()) * framesToSamples);
             src.fadeOutSamples =
                 int64_t(double(clip->fadeOutFrames()) * framesToSamples);
+
+            // 素材の PCM を供給元から引き、グラフが所有権を持つ (5.3.2)。
+            // 参照は ClipSource に張るだけで、RT スレッドはコピーしない。
+            if (sources && !clip->assetId().isNull()) {
+                std::shared_ptr<DecodedAudio> decoded =
+                    sources->decodeAsset(clip->assetId());
+                if (decoded && decoded->frames() > 0) {
+                    graph->ownedAudio.push_back(decoded);
+                    src.preloadedData  = decoded->planar();
+                    src.preloadedFrames = decoded->frames();
+                    src.channels       = decoded->channels;
+                }
+            }
+
             node.clips.push_back(src);
         }
 

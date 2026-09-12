@@ -79,6 +79,10 @@ public:
     /// 再生を止めずに差し替えられる (RCU)。
     void rebuildGraph(const Timeline& timeline, const Project& project);
 
+    /// 音声ソース (素材 PCM) の供給元を設定する。nullptr なら無音グラフ。
+    /// デコードはグラフ構築時 (UI スレッド) にのみ行われる。
+    void setAudioSourceProvider(IAudioSourceProvider* provider) { sourceProvider_ = provider; }
+
     /// プラグインのレイテンシ変更通知を受けたときに立てるフラグ。
     void requestGraphRebuild() { rebuildRequested_.store(true, std::memory_order_relaxed); }
     bool isGraphRebuildRequested() const
@@ -151,6 +155,9 @@ private:
     std::vector<RetiredGraph>       retired_;      ///< UI スレッドのみ触る
     mutable QMutex                  retiredMutex_;
     std::atomic<uint64_t>           rtGeneration_{0};
+
+    /// 音声ソースの供給元。グラフ構築時 (UI スレッド) にのみ触る。
+    IAudioSourceProvider*           sourceProvider_ = nullptr;
 
     std::atomic<bool>               playing_{false};
     std::atomic<bool>               rebuildRequested_{false};

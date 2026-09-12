@@ -3,6 +3,8 @@
 #include "../core/Rational.h"
 #include "DelayCompensator.h"
 
+#include <QUuid>
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -17,6 +19,33 @@ class IAudioEffectNode;
 } // namespace yave
 
 namespace yave::audio {
+
+/// 事前デコードされた float PCM 音声。グラフが所有権を持ち、RT スレッドが参照する。
+///
+/// グラフ構築後はイミュータブルとして扱う。channelPtrs は channelData を
+/// 埋め終えた後に一度だけ構築し、以後変化させない (アドレス安定)。
+struct DecodedAudio
+{
+    int    sampleRate = 0;
+    int    channels   = 0;
+    std::vector<std::vector<float>> channelData;   ///< [ch][sample]
+    std::vector<const float*>       channelPtrs;   ///< channelData[i].data() のスナップショット
+
+    /// RT スレッドが読む ClipSource::preloadedData へ渡す配列。
+    const float* const* planar() const { return channelPtrs.data(); }
+    int64_t frames() const { return channelData.empty() ? 0 : int64_t(channelData[0].size()); }
+};
+
+/// 音声ソース (素材) の供給インタフェース。
+/// UI スレッドのグラフ構築時に呼ばれる。デコード実体は app / media 層が提供する。
+class IAudioSourceProvider
+{
+public:
+    virtual ~IAudioSourceProvider() = default;
+
+    /// assetId の音声を float PCM へデコードして返す。失敗 / 未対応は nullptr。
+    virtual std::shared_ptr<DecodedAudio> decodeAsset(const QUuid& assetId) = 0;
+};
 
 /// RT スレッドが読む POD グラフ。Timeline とは完全に分離されたデータ構造。
 ///
@@ -40,6 +69,14 @@ struct ClipSource            ///< 再生すべき音声クリップ 1 個分
     int64_t fadeInSamples  = 0;
     int64_t fadeOutSamples = 0;
 };
+
+/// 1 クリップ分の PCM を出力バッファへ加算ミックスする (RT スレッドから呼ぶ)。
+///
+/// buf は事前にゼロ初期化済みであること。blockStart..blockStart+numFrames が
+/// クリップ区間と重ならない場合、または PCM を持たないクリップは何もしない。
+/// ソースのチャンネル数が出力より少ない場合はパンで分配し、多い場合は切り詰める。
+void mixClipBlock(float* const* buf, int channels, int numFrames,
+                  int64_t blockStart, const ClipSource& src) noexcept;
 
 struct TrackNode
 {
@@ -71,6 +108,10 @@ struct AudioRenderGraph
     bool    loopEnabled   = false;
     int64_t loopStartSample = 0;
     int64_t loopEndSample   = 0;
+
+    /// このグラフが所有する事前デコードバッファ。
+    /// ClipSource::preloadedData はここが保持する DecodedAudio を指す。
+    std::vector<std::shared_ptr<DecodedAudio>> ownedAudio;
 };
 
 /// AudioRenderGraph の構築ヘルパ (UI スレッドから呼ぶ)。
@@ -79,13 +120,15 @@ struct AudioRenderGraph
 ///   RT スレッド内でデコードはできない (malloc とディスク I/O が発生する)。
 ///   再生範囲の音声はあらかじめメモリに載せるか、ページ単位のストリーミング
 ///   キャッシュ (AudioStreamCache, 将来実装) から供給する。
-/// 現行実装では PCM 参照を持たないグラフを構築する (無音出力)。
+/// sources が非 null の場合、各音声クリップの PCM をここから引き、
+/// ClipSource::preloadedData へ参照を張る。
 class AudioRenderGraphBuilder
 {
 public:
     /// Timeline -> AudioRenderGraph。
     static std::unique_ptr<AudioRenderGraph> build(const yave::Timeline& timeline,
-                                                   const yave::Project& project);
+                                                   const yave::Project& project,
+                                                   IAudioSourceProvider* sources = nullptr);
 };
 
 } // namespace yave::audio
