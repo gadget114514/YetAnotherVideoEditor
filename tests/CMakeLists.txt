@@ -2,10 +2,13 @@ set(YAVE_TESTS
     tst_rational
     tst_timeline
     tst_srtparser
+    tst_subtitlecommands
     tst_projectserializer
     tst_delaycompensator
     tst_i18n
     tst_transitionfilter
+    tst_audiograph
+    tst_propertycommands
 )
 
 foreach(test_name ${YAVE_TESTS})
@@ -42,6 +45,29 @@ foreach(test_name ${YAVE_TESTS})
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/data)
 endforeach()
 
-set_tests_properties(${YAVE_TESTS} PROPERTIES
+# ---- tst_mediaprobe -------------------------------------------------------
+# MediaProbe は FFmpeg (yave_media) を必要とするため、FFmpeg 有効時のみビルドする。
+# デコードはソフトウェア (libav) のみで GPU を必要としないため、ヘッドレスでも動作する。
+set(YAVE_ALL_TESTS ${YAVE_TESTS})
+if(YAVE_ENABLE_FFMPEG)
+    qt_add_executable(tst_mediaprobe tst_mediaprobe.cpp)
+    yave_apply_common_settings(tst_mediaprobe)
+    target_link_libraries(tst_mediaprobe PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Test
+        yave_core yave_media)
+    set_target_properties(tst_mediaprobe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    if(WIN32)
+        add_custom_command(TARGET tst_mediaprobe POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:Qt6::Test>" "$<TARGET_FILE_DIR:tst_mediaprobe>"
+            VERBATIM)
+    endif()
+    add_test(NAME tst_mediaprobe COMMAND tst_mediaprobe
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/data)
+    list(APPEND YAVE_ALL_TESTS tst_mediaprobe)
+endif()
+
+set_tests_properties(${YAVE_ALL_TESTS} PROPERTIES
     ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>\\;$ENV{PATH}")
 

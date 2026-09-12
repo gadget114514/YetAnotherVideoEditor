@@ -33,13 +33,23 @@ public:
     void releaseResources();
 
     /// スナップショットを合成し、結果テクスチャを返す (void* = QRhiTexture*)。
-    /// プレビュー表示はこのテクスチャをスケール描画する。
-    void* renderFrame(const RenderSnapshot& snapshot);
+    /// commandBuffer は PreviewItem の render() に渡される、Scene Graph の
+    /// フレームで使用中のコマンドバッファ。フレームの入れ子は作らない。
+    void* renderFrame(void* commandBuffer, const RenderSnapshot& snapshot);
+
+    /// 合成結果テクスチャを、表示用レンダーターゲット (PreviewItem の
+    /// カラーテクスチャ / renderTarget()) へ描画する (3.4.1 PRESENT)。
+    /// アスペクトは維持せず、ターゲット全体へ拡縮描画する。
+    void present(void* commandBuffer, void* renderTarget, void* compositeTexture);
 
     /// AI 参照フレーム要求の処理。trackId + frame を合成して outputPath へ PNG 保存する。
     /// ReferenceFrameSink 経由で ai モジュールから呼ばれる。
     static void requestFrameRender(const QUuid& trackId, int64_t frame,
                                    const QString& outputPath);
+
+    /// FrameCache への接続 (yave_media の FrameCache*)。
+    /// void* で受け、実ファイルでは reinterpret_cast する (ヘッダ依存回避)。
+    void setFrameCache(void* cache) { frameCache_ = cache; }
 
     /// 出力解像度の変更 (RT 再生成が必要)
     void setOutputSize(const QSize& size);
@@ -47,6 +57,7 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    void* frameCache_ = nullptr;   ///< yave::media::FrameCache*
 };
 
 } // namespace yave::render

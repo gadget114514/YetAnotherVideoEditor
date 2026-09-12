@@ -259,8 +259,15 @@ struct AudioDecoder::Impl
     FormatContextPtr fmt;
     CodecContextPtr  codec;
     SwrPtr           swr;
+    FramePtr         frame  = makeFrame();
+    PacketPtr        packet = makePacket();
 
+    int streamIndex = -1;
     int64_t nextFrame = 0;
+
+    // 出力先のサンプルレート / チャンネル数
+    int outSampleRate = 48000;
+    int outChannels   = 2;
 };
 
 AudioDecoder::AudioDecoder(const QString& filePath)
@@ -273,16 +280,153 @@ bool AudioDecoder::open(QString* errorOut)
 {
     Q_UNUSED(errorOut);
 #if defined(YAVE_HAVE_FFMPEG)
-    // 実装: libavformat で開き、libswresample で 48kHz stereo float へ正規化する。
-    // read() はインターリーブ float32 を出力する。
-#endif
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, filePath_.toUtf8().constData(),
+                            nullptr, nullptr) < 0 || !fmt) {
+        if (errorOut)
+            *errorOut = QStringLiteral("avformat_open_input failed");
+        return false;
+    }
+    impl_->fmt.reset(fmt);
+
+    if (avformat_find_stream_info(impl_->fmt.get(), nullptr) < 0) {
+        if (errorOut)
+            *errorOut = QStringLiteral("avformat_find_stream_info failed");
+        return false;
+    }
+
+    const AVCodec* decoder = nullptr;
+    impl_->streamIndex =
+        av_find_best_stream(impl_->fmt.get(), AVMEDIA_TYPE_AUDIO,
+                            -1, -1, &decoder, 0);
+    if (impl_->streamIndex < 0 || !decoder) {
+        if (errorOut)
+            *errorOut = QStringLiteral("No audio stream found.");
+        return false;
+    }
+
+    AVStream* stream = impl_->fmt->streams[size_t(impl_->streamIndex)];
+
+    impl_->codec.reset(avcodec_alloc_context3(decoder));
+    if (!impl_->codec) {
+        if (errorOut)
+            *errorOut = QStringLiteral("Failed to allocate audio codec context.");
+        return false;
+    }
+    if (avcodec_parameters_to_context(impl_->codec.get(), stream->codecpar) < 0) {
+        if (errorOut)
+            *errorOut = QStringLiteral("avcodec_parameters_to_context failed");
+        return false;
+    }
+
+    if (avcodec_open2(impl_->codec.get(), decoder, nullptr) < 0) {
+        if (errorOut)
+            *errorOut = QStringLiteral("avcodec_open2 failed");
+        return false;
+    }
+
+    // libswresample: ソースのチャンネルレイアウト/フォーマット -> 48kHz stereo float
+    AVChannelLayout outLayout = AV_CHANNEL_LAYOUT_STEREO;
+    SwrContext* rawSwr = nullptr;
+    if (swr_alloc_set_opts2(&rawSwr,
+                            &outLayout, AV_SAMPLE_FMT_FLT, impl_->outSampleRate,
+                            &impl_->codec->ch_layout,
+                            impl_->codec->sample_fmt,
+                            impl_->codec->sample_rate,
+                            0, nullptr) < 0 || !rawSwr) {
+        if (errorOut)
+            *errorOut = QStringLiteral("swr_alloc_set_opts2 failed");
+        return false;
+    }
+    impl_->swr.reset(rawSwr);
+    if (swr_init(impl_->swr.get()) < 0) {
+        if (errorOut)
+            *errorOut = QStringLiteral("swr_init failed");
+        return false;
+    }
+
+    // 尺の算出
+    if (stream->nb_frames > 0)
+        totalFrames_ = stream->nb_frames;
+    else if (stream->duration != AV_NOPTS_VALUE && impl_->codec->sample_rate > 0)
+        totalFrames_ = int64_t(double(stream->duration) * double(impl_->outSampleRate)
+                               / double(AV_TIME_BASE));
+
+    return true;
+#else
+    Q_UNUSED(errorOut);
     return false;
+#endif
 }
 
-int64_t AudioDecoder::read(float*, int64_t maxFrames)
+int64_t AudioDecoder::read(float* interleavedOut, int64_t maxFrames)
 {
+    if (!impl_ || maxFrames <= 0)
+        return 0;
+
+#if defined(YAVE_HAVE_FFMPEG)
+    if (!impl_->codec || !impl_->swr)
+        return 0;
+
+    int64_t totalRead = 0;
+    uint8_t* outBuf = reinterpret_cast<uint8_t*>(interleavedOut);
+    const int outBytesPerFrame = impl_->outChannels * sizeof(float);
+
+    while (totalRead < maxFrames) {
+        // swr の内部バッファに残りがあるならそちらから先に消費
+        int gotSamples = swr_convert(impl_->swr.get(),
+                                     &outBuf, int(maxFrames - totalRead),
+                                     nullptr, 0);
+        if (gotSamples > 0) {
+            totalRead += gotSamples;
+            outBuf += gotSamples * outBytesPerFrame;
+            continue;
+        }
+
+        // デコーダから次のフレームを取得
+        while (avcodec_receive_frame(impl_->codec.get(), impl_->frame.get()) == 0) {
+            const uint8_t* inBuf[1] = { impl_->frame->data[0] };
+            int inSamples = impl_->frame->nb_samples;
+
+            gotSamples = swr_convert(impl_->swr.get(),
+                                     &outBuf, int(maxFrames - totalRead),
+                                     inBuf, inSamples);
+            if (gotSamples > 0) {
+                totalRead += gotSamples;
+                outBuf += gotSamples * outBytesPerFrame;
+            }
+
+            av_frame_unref(impl_->frame.get());
+            if (totalRead >= maxFrames)
+                break;
+        }
+
+        if (totalRead >= maxFrames)
+            break;
+
+        // もうパケットを読めないなら終了
+        if (av_read_frame(impl_->fmt.get(), impl_->packet.get()) < 0)
+            break;
+
+        if (impl_->packet->stream_index != impl_->streamIndex) {
+            impl_->packet.reset(makePacket().release());
+            continue;
+        }
+
+        if (avcodec_send_packet(impl_->codec.get(), impl_->packet.get()) < 0) {
+            error_ = true;
+            break;
+        }
+        impl_->packet.reset(makePacket().release());
+    }
+
+    impl_->nextFrame += totalRead;
+    return totalRead;
+#else
+    Q_UNUSED(interleavedOut);
     Q_UNUSED(maxFrames);
     return 0;
+#endif
 }
 
 #else   // !YAVE_HAVE_FFMPEG

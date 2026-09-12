@@ -44,7 +44,19 @@ public:
                          const ProgressFn& progress,
                          const CancelCheckFn& cancelled) override;
 
-    void prepareParams(AiGenerationParams&) override {}
+    void prepareParams(AiGenerationParams& p) override
+    {
+        // リモート API の一般的な制限にパラメータをクランプする
+        if (p.steps < 1)   p.steps = 1;
+        if (p.steps > 150) p.steps = 150;
+        if (p.guidanceScale < 0.0)  p.guidanceScale = 0.0;
+        if (p.guidanceScale > 30.0) p.guidanceScale = 30.0;
+        if (p.seed < -1) p.seed = -1;
+
+        // 解像度の下限保証 (API 側の最低要件に合わせる)
+        if (p.outputResolution.width() < 256 || p.outputResolution.height() < 256)
+            p.outputResolution = QSize(512, 512);
+    }
 
     void setBaseUrl(const QString& url) { baseUrl_ = url; }
     QString baseUrl() const { return baseUrl_; }

@@ -13,6 +13,10 @@ Rectangle {
     property double fps: 60.0
     property int    duration: 0
 
+    // 選択状態 (インスペクタと連動)。MainWindow が SelectionModel から供給する。
+    property string selectedClipId: ""
+    property string selectedTrackId: ""
+
     property real zoomFactor: 0.2
     property int    trackHeaderWidth: 160
     property int    tickInterval: niceTick()
@@ -21,6 +25,10 @@ Rectangle {
     // 呼び出し側 (MainWindow) が単一の書き込み元になるよう、ここでは
     // プロパティを書き換えずにシグナルのみ発行する。
     signal seekRequested(int frame)
+
+    // クリックによる選択。呼び出し側 (MainWindow) が SelectionModel へ反映する。
+    signal clipSelected(string trackId, string clipId)
+    signal trackSelected(string trackId)
 
     function niceTick() {
         const minPx = 42
@@ -260,9 +268,9 @@ Rectangle {
                 Rectangle {
                     width: container.trackHeaderWidth
                     height: parent.height
-                    color: "#2d2d2d"
-                    border.color: "#1a1a1a"
-                    border.width: 1
+                    color: model.trackId === container.selectedTrackId ? "#3a3f4a" : "#2d2d2d"
+                    border.color: model.trackId === container.selectedTrackId ? "#ffb54a" : "#1a1a1a"
+                    border.width: model.trackId === container.selectedTrackId ? 2 : 1
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -301,10 +309,14 @@ Rectangle {
 
                     MouseArea {
                         anchors.fill: parent
-                        acceptedButtons: Qt.RightButton
-                        onClicked: {
-                            trackMenu.trackId = model.trackId
-                            trackMenu.popup()
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: (mouse) => {
+                            if (mouse.button === Qt.RightButton) {
+                                trackMenu.trackId = model.trackId
+                                trackMenu.popup()
+                            } else {
+                                container.trackSelected(model.trackId)
+                            }
                         }
                     }
                 }
@@ -360,8 +372,10 @@ Rectangle {
                             const startFrame = laneDrop.frameAt(drop.x)
                             laneDrop.snappedBoundary = -1
 
-                            if (drop.hasFormat("yave/library-item")) {
-                                const payload = drop.getDataAsString("yave/library-item")
+                            // DragEvent には hasFormat() がないので getDataAsString の
+                            // 空判定で形式を見る (空でない文字列ならその形式を持つ)
+                            const payload = drop.getDataAsString("yave/library-item")
+                            if (payload.length > 0) {
                                 if (editController.dropLibraryItem(payload, trackRow.trackId,
                                                                    startFrame, ""))
                                     drop.acceptProposedAction()
@@ -372,7 +386,7 @@ Rectangle {
                             if (assetId.length === 0)
                                 return
                             editController.addAssetClip(trackRow.trackIndex, trackRow.trackId,
-                                                        assetId, startFrame, 300)
+                                                        assetId, startFrame, 180)
                             drop.acceptProposedAction()
                         }
                     }
@@ -380,12 +394,16 @@ Rectangle {
                     // 空き領域の右クリック -> レーンコンテキストメニュー
                     MouseArea {
                         anchors.fill: parent
-                        acceptedButtons: Qt.RightButton
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onClicked: (mouse) => {
-                            laneMenu.trackIndex = trackRow.trackIndex
-                            laneMenu.trackId = trackRow.trackId
-                            laneMenu.frame = Math.max(0, Math.round(mouse.x / container.zoomFactor))
-                            laneMenu.popup()
+                            if (mouse.button === Qt.RightButton) {
+                                laneMenu.trackIndex = trackRow.trackIndex
+                                laneMenu.trackId = trackRow.trackId
+                                laneMenu.frame = Math.max(0, Math.round(mouse.x / container.zoomFactor))
+                                laneMenu.popup()
+                            } else {
+                                container.trackSelected(trackRow.trackId)
+                            }
                         }
                     }
 
@@ -400,7 +418,10 @@ Rectangle {
                             radius: 2
                             color: generatedByAi ? "#5a4a7a" : model.type === "audio"
                                                      ? "#3a6a4a" : "#3a5f8a"
-                            border.color: missingEffects ? "#cc4444" : Qt.lighter(color, 1.2)
+                            border.color: model.clipId === container.selectedClipId
+                                              ? "#ffb54a"
+                                              : (missingEffects ? "#cc4444" : Qt.lighter(color, 1.2))
+                            border.width: model.clipId === container.selectedClipId ? 2 : 1
 
                             Text {
                                 anchors.left: parent.left
@@ -447,12 +468,16 @@ Rectangle {
 
                             MouseArea {
                                 anchors.fill: parent
-                                acceptedButtons: Qt.RightButton
-                                onClicked: {
-                                    clipMenu.clipId = model.clipId
-                                    clipMenu.trackId = trackRow.trackId
-                                    clipMenu.trackIndex = trackRow.trackIndex
-                                    clipMenu.popup()
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                onClicked: (mouse) => {
+                                    if (mouse.button === Qt.RightButton) {
+                                        clipMenu.clipId = model.clipId
+                                        clipMenu.trackId = trackRow.trackId
+                                        clipMenu.trackIndex = trackRow.trackIndex
+                                        clipMenu.popup()
+                                    } else {
+                                        container.clipSelected(trackRow.trackId, model.clipId)
+                                    }
                                 }
                             }
                         }

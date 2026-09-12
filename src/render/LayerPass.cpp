@@ -32,6 +32,7 @@ struct LayerPass::Impl
 
     bool initialized = false;
     bool pipelineReady = false;
+    bool vbufUploaded = false;
     QRhiRenderPassDescriptor* lastRpDesc = nullptr;
 
     void bindTextures(QRhiTexture* src, QRhiTexture* dst)
@@ -132,7 +133,8 @@ bool LayerPass::initialize(void* rhiPtr, void*,
 }
 
 void LayerPass::draw(void* commandBufferPtr, void* renderTargetPtr,
-                     void* srcTexturePtr, void* dstTexturePtr, const LayerItem& layer)
+                     void* srcTexturePtr, void* dstTexturePtr, const LayerItem& layer,
+                     void* preBatchPtr)
 {
     auto* cb = static_cast<QRhiCommandBuffer*>(commandBufferPtr);
     auto* rt = static_cast<QRhiRenderTarget*>(renderTargetPtr);
@@ -167,7 +169,20 @@ void LayerPass::draw(void* commandBufferPtr, void* renderTargetPtr,
     u.blendMode   = int(layer.blendMode);
     u.colorSpace  = 0;   ///< RGB (YUV ソースは事前変換 or 専用パス)
 
-    QRhiResourceUpdateBatch* batch = impl_->rhi->nextResourceUpdateBatch();
+    auto* preBatch = static_cast<QRhiResourceUpdateBatch*>(preBatchPtr);
+    QRhiResourceUpdateBatch* batch = preBatch ? preBatch
+                                              : impl_->rhi->nextResourceUpdateBatch();
+    // フルスクリーン三角形の頂点は initialize 時点ではアップロードできないため、
+    // 最初の描画時にまとめて投入する (vbuf は Immutable で 1 回のみ)。
+    if (!impl_->vbufUploaded) {
+        static const float vertexData[] = {
+            -1.0f, -1.0f, 0.0f, 1.0f,
+             3.0f, -1.0f, 2.0f, 1.0f,
+            -1.0f,  3.0f, 0.0f, -1.0f,
+        };
+        batch->uploadStaticBuffer(impl_->vbuf.get(), vertexData);
+        impl_->vbufUploaded = true;
+    }
     batch->updateDynamicBuffer(impl_->ubuf.get(), 0, sizeof(u), &u);
 
     // テクスチャを SRB へ結び直す (毎フレーム差し替え)

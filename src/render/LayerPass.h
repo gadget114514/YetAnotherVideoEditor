@@ -32,11 +32,14 @@ public:
     ///
     /// srcTexture : 上に乗せるレイヤー
     /// dstTexture : ここまでの合成結果 (ping-pong)
+    /// preBatch   : beginPass に渡す追加リソース更新バッチ (テクスチャアップロード用)。
+    ///              nullptr なら通常のバッチのみ。
     void draw(void* commandBuffer,
               void* renderPassDescriptor,
               void* srcTexture,
               void* dstTexture,
-              const LayerItem& layer);
+              const LayerItem& layer,
+              void* preBatch = nullptr);
 
 private:
     struct Impl;

@@ -40,6 +40,17 @@ ApplicationWindow {
             Action { text: qsTr("Japanese") }
             Action { text: qsTr("English") }
         }
+        Menu {
+            title: qsTr("Debug")
+            Action {
+                text: qsTr("Open app_debug.log")
+                onTriggered: Qt.openUrlExternally("file:///d:/ws/YetAnotherVideoEditor/app_debug.log")
+            }
+            Action {
+                text: qsTr("Show Log Panel")
+                onTriggered: rightPaneTabs.currentIndex = 1
+            }
+        }
     }
 
     SplitView {
@@ -199,6 +210,31 @@ ApplicationWindow {
                     }
                 }
             }
+
+            // ---- 右ペイン: インスペクタ / ログ (タブ切替、1.7.4 右エリア) ----
+            ColumnLayout {
+                SplitView.preferredWidth: 300
+                SplitView.minimumWidth: 220
+                SplitView.maximumWidth: 520
+                SplitView.fillHeight: true
+                spacing: 0
+
+                TabBar {
+                    id: rightPaneTabs
+                    Layout.fillWidth: true
+                    TabButton { text: qsTr("Inspector") }
+                    TabButton { text: qsTr("Log") }
+                }
+
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    currentIndex: rightPaneTabs.currentIndex
+
+                    InspectorPanel {}
+                    LogPanel {}
+                }
+            }
         }
 
         // 下半部 (ボトム全幅)
@@ -210,6 +246,8 @@ ApplicationWindow {
             playheadFrame: root.playheadFrame
             fps: playbackController.fps
             duration: playbackController.duration
+            selectedClipId: selectionModel.clipId
+            selectedTrackId: selectionModel.trackId
         }
     }
 
@@ -230,6 +268,22 @@ ApplicationWindow {
         function onSeekRequested(frame) {
             root.playheadFrame = frame
             playbackController.seek(frame)
+        }
+        function onClipSelected(trackId, clipId) {
+            selectionModel.selectClip(trackId, clipId)
+        }
+        function onTrackSelected(trackId) {
+            selectionModel.selectTrack(trackId)
+        }
+    }
+
+    // 停止 / 一時停止時に UI の再生位置を確定位置へ合わせる
+    // (再生中のポーリングは上の Timer が行う)。
+    Connections {
+        target: playbackController
+        function onPlaybackStateChanged(playing) {
+            if (!playing)
+                root.playheadFrame = playbackController.currentFrame()
         }
     }
 

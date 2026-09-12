@@ -7,6 +7,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <functional>
 
 namespace yave {
 
@@ -21,6 +22,11 @@ class AudioEncoder;
 class Muxer;
 
 using ExportProgressFn = bool (*)(double progress01, void* userData);
+
+/// フレームごとのピクセル供給コールバック。
+/// (frameIndex, width, height) -> RGBA8 バッファ。null を返すと中断。
+using FramePixelProvider = std::function<QByteArray(int64_t frameIndex,
+                                                    int width, int height)>;
 
 struct ExportSettings
 {
@@ -52,12 +58,17 @@ public:
     /// 戻り値はエラーメッセージ (成功時は空文字列)。
     QString run(ExportProgressFn progress, void* userData);
 
+    /// フレームピクセル供給コールバックを設定する。
+    /// 設定しない場合、フレームループはスキップされる。
+    void setFramePixelProvider(FramePixelProvider provider) { pixelProvider_ = std::move(provider); }
+
     void cancel() { cancelled_ = true; }
 
     const ExportSettings& settings() const { return settings_; }
 
 private:
     ExportSettings settings_;
+    FramePixelProvider pixelProvider_;
     bool           cancelled_ = false;
 };
 

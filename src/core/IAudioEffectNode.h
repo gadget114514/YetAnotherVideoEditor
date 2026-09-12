@@ -22,6 +22,16 @@ public:
 
     /// 永続化用の一意なネイティブ ID (VST3 class id 等)。空なら保存対象外。
     virtual QString nativeId() const = 0;
+
+    /// リアルタイム音声処理。バッファを in-place で更新する。
+    /// RT スレッド (noexcept)。malloc/free/mutex/Qt シグナル禁止。
+    /// デフォルト実装はノーオーパー (VST3 が未接続の場合)。
+    virtual void processRt(float* const* buffers, int channels, int frames) noexcept
+    {
+        Q_UNUSED(buffers);
+        Q_UNUSED(channels);
+        Q_UNUSED(frames);
+    }
 };
 
 } // namespace yave

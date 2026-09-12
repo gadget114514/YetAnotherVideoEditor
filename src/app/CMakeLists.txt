@@ -15,6 +15,13 @@ qt_add_executable(yave_app
     models/TrackListModel.cpp
     models/AssetListModel.h
     models/AssetListModel.cpp
+    models/SelectionModel.h
+    models/SelectionModel.cpp
+    models/LogModel.h
+    models/LogModel.cpp
+
+    audio/AudioSourceCache.h
+    audio/AudioSourceCache.cpp
 
     library/LibraryStore.h
     library/LibraryStore.cpp
@@ -31,6 +38,8 @@ qt_add_qml_module(yave_app
     QML_FILES
         qml/MainWindow.qml
         qml/timeline/TimelineView.qml
+        qml/inspector/InspectorPanel.qml
+        qml/inspector/LogPanel.qml
         qml/library/LibraryPanel.qml
         qml/library/LibraryTree.qml
         qml/library/LibraryItemView.qml

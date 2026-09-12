@@ -12,6 +12,8 @@
 #include "controllers/ProjectController.h"
 #include "models/TrackListModel.h"
 #include "models/AssetListModel.h"
+#include "models/SelectionModel.h"
+#include "models/LogModel.h"
 #include "library/LibraryStore.h"
 #include "items/ThumbnailImageProvider.h"
 #include "items/PreviewItem.h"
@@ -32,10 +34,14 @@ void write_log(const std::string& msg) {
     if (f.is_open()) {
         f << msg << std::endl;
     }
+    yave::app::LogModel::instance().append(QString::fromStdString(msg));
 }
 
 int main(int argc, char** argv)
 {
+    // アプリ内ログウィンドウ (Inspector とタブ切替) を最初に有効化する。
+    // これ以降の qDebug/qInfo/qWarning はすべてそこに出る。
+    yave::app::LogModel::installQtMessageHandler();
     write_log("main started");
     // QWidget 系 (PluginWindow) を使うので QApplication を使う。
     // QGuiApplication では QWidget が動かない。
@@ -73,6 +79,9 @@ int main(int argc, char** argv)
     yave::AssetListModel assetListModel;
     assetListModel.setProject(projectController.project());
 
+    yave::SelectionModel selectionModel;
+    selectionModel.setProject(projectController.project());
+
     QQmlApplicationEngine engine;
 
     // ライブラリ (1.7.5): メディアカテゴリの供給元と、サムネイル画像プロバイダ。
@@ -87,6 +96,7 @@ int main(int argc, char** argv)
         playback.attachProject(proj);
         trackListModel.setProject(proj);
         assetListModel.setProject(proj);
+        selectionModel.setProject(proj);
         yave::app::LibraryStore::instance().setProject(proj);
 
         if (!engine.rootObjects().isEmpty()) {
@@ -124,6 +134,10 @@ int main(int argc, char** argv)
                                              &trackListModel);
     engine.rootContext()->setContextProperty(QStringLiteral("assetListModel"),
                                              &assetListModel);
+    engine.rootContext()->setContextProperty(QStringLiteral("selectionModel"),
+                                             &selectionModel);
+    engine.rootContext()->setContextProperty(QStringLiteral("logModel"),
+                                             &yave::app::LogModel::instance());
 
     const QUrl url(QStringLiteral("qrc:/qt/qml/Yave/qml/MainWindow.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,

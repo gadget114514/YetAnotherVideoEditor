@@ -4,6 +4,7 @@
 #include "TexturePool.h"
 #include "TransitionPass.h"
 
+#include "../media/FrameCache.h"
 #include "../util/Log.h"
 
 #include <QFile>
@@ -43,6 +44,17 @@ void RhiCompositor::requestFrameRender(const QUuid& trackId, int64_t frame,
     QMutexLocker lock(&g_requestMutex);
     g_pendingRequests.push_back({trackId, frame, outputPath});
 }
+
+// layer_blend.frag の uniform ブロックと一致させる (3.4.3)。PRESENT 用。
+struct alignas(16) PresentUniforms
+{
+    QMatrix4x4 transform;
+    QVector4D  cropRect;      // x, y, w, h  (0..1)
+    float      opacity;
+    int        blendMode;
+    int        colorSpace;
+    float      pad;
+};
 
 struct RhiCompositor::Impl
 {
@@ -139,6 +151,84 @@ struct RhiCompositor::Impl
         }
         return current;
     }
+
+    // ---- プレビュー表示 (PRESENT) 用の簡易パス ----
+    // 合成結果テクスチャを PreviewItem のカラーテクスチャへ描画する。
+    // パイプラインはターゲットの renderPassDescriptor に依存するため、
+    // 変化したら作り直す。
+    std::unique_ptr<QRhiGraphicsPipeline> presentPipeline;
+    std::unique_ptr<QRhiShaderResourceBindings> presentSrb;
+    std::unique_ptr<QRhiSampler> presentSampler;
+    std::unique_ptr<QRhiBuffer> presentVbuf;
+    std::unique_ptr<QRhiBuffer> presentUbuf;
+    QRhiRenderPassDescriptor* presentRpDesc = nullptr;
+    bool presentReady = false;
+
+    QByteArray uvVertData;     ///< fullscreen_uv.vert.qsb
+    QByteArray blendFragData;  ///< layer_blend.frag.qsb
+
+    void ensurePresentPipeline(QRhiRenderTarget* rt)
+    {
+        if (rt->renderPassDescriptor() == presentRpDesc && presentPipeline)
+            return;
+
+        presentPipeline.reset();
+        presentSrb.reset();
+
+        const QShader vs = QShader::fromSerialized(uvVertData);
+        const QShader fs = QShader::fromSerialized(blendFragData);
+        if (!vs.isValid() || !fs.isValid()) {
+            presentReady = false;
+            return;
+        }
+
+        if (!presentSampler) {
+            presentSampler.reset(rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
+                                                 QRhiSampler::None, QRhiSampler::ClampToEdge,
+                                                 QRhiSampler::ClampToEdge));
+            presentSampler->create();
+        }
+
+        // フルスクリーン三角形 (位置 + UV)。Dynamic にして毎フレーム書き込む
+        // (initialize 時点ではフレームが無いため静的アップロードを避ける)。
+        static const float vertexData[] = {
+            -1.0f, -1.0f, 0.0f, 1.0f,
+             3.0f, -1.0f, 2.0f, 1.0f,
+            -1.0f,  3.0f, 0.0f, -1.0f,
+        };
+        if (!presentVbuf) {
+            presentVbuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
+                                             sizeof(vertexData)));
+            presentVbuf->create();
+        }
+        if (!presentUbuf) {
+            presentUbuf.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                             sizeof(PresentUniforms)));
+            presentUbuf->create();
+        }
+
+        presentSrb.reset(rhi->newShaderResourceBindings());
+        presentPipeline.reset(rhi->newGraphicsPipeline());
+        presentPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex, vs },
+            { QRhiShaderStage::Fragment, fs },
+        });
+        presentPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        presentPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        presentPipeline->setSampleCount(1);
+
+        QRhiVertexInputLayout inputLayout;
+        inputLayout.setBindings({ { 4 * sizeof(float) } });
+        inputLayout.setAttributes({
+            { 0, 0, QRhiVertexInputAttribute::Float2, 0 },
+            { 0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float) },
+        });
+        presentPipeline->setVertexInputLayout(inputLayout);
+        presentPipeline->setShaderResourceBindings(presentSrb.get());
+        presentPipeline->setRenderPassDescriptor(rt->renderPassDescriptor());
+        presentReady = presentPipeline->create();
+        presentRpDesc = rt->renderPassDescriptor();
+    }
 };
 
 RhiCompositor::RhiCompositor() : impl_(std::make_unique<Impl>()) {}
@@ -163,6 +253,12 @@ void RhiCompositor::initialize(void* rhiPtr, void*)
         vsData = vsFile.readAll();
     if (fsFile.open(QIODevice::ReadOnly))
         fsData = fsFile.readAll();
+
+    // PRESENT パス用シェーダ (UV 頂点 + ブレンド) を保存しておく
+    QFile uvVertFile(QStringLiteral(":/shaders/fullscreen_uv.vert.qsb"));
+    if (uvVertFile.open(QIODevice::ReadOnly))
+        impl_->uvVertData = uvVertFile.readAll();
+    impl_->blendFragData = fsData;
 
     impl_->initialized = impl_->layerPass->initialize(rhi, nullptr, vsData, fsData);
     if (!impl_->initialized)
@@ -204,6 +300,13 @@ void RhiCompositor::releaseResources()
         impl_->filterPass->releaseResources();
     if (impl_->transitionPass)
         impl_->transitionPass->releaseResources();
+    impl_->presentPipeline.reset();
+    impl_->presentSrb.reset();
+    impl_->presentSampler.reset();
+    impl_->presentVbuf.reset();
+    impl_->presentUbuf.reset();
+    impl_->presentRpDesc = nullptr;
+    impl_->presentReady = false;
     for (auto& t : impl_->rtTex)
         t.reset();
     for (auto& t : impl_->scratchTex)
@@ -232,10 +335,12 @@ void RhiCompositor::setOutputSize(const QSize& size)
         t.reset();
 }
 
-void* RhiCompositor::renderFrame(const RenderSnapshot& snapshot)
+void* RhiCompositor::renderFrame(void* commandBuffer, const RenderSnapshot& snapshot)
 {
-    if (!impl_->initialized || !impl_->rhi)
+    if (!impl_->initialized || !impl_->rhi || !commandBuffer)
         return nullptr;
+
+    auto* cb = static_cast<QRhiCommandBuffer*>(commandBuffer);
 
     setOutputSize(snapshot.canvasSize);
     impl_->ensureRenderTargets();
@@ -244,26 +349,81 @@ void* RhiCompositor::renderFrame(const RenderSnapshot& snapshot)
         return nullptr;
 
     QRhi* rhi = impl_->rhi;
-    QRhiCommandBuffer* cb = nullptr;
-    if (!rhi->beginOffscreenFrame(&cb))
-        return nullptr;
 
     // ---- (1) PREPARE: 各レイヤーのソーステクスチャを取得 -----------------
-    // VideoSourceRef -> FrameCache / DecodeWorkerPool
-    // SubtitleRenderRef -> SubtitleRenderer (glyph atlas)
-    // 現行ビルドではソース供給が未接続のため、小さなプレースホルダを割り当てる。
+    // VideoSourceRef -> FrameCache からデコード済みフレームを取得し GPU へアップロード
+    // SubtitleRenderRef -> SubtitleRenderer (glyph atlas) は未接続
+    struct PendingUpload {
+        QRhiTexture* tex;
+        QByteArray pixels;
+        QSize size;
+    };
+    QVector<PendingUpload> pendingUploads;
+    auto* frameCache = reinterpret_cast<yave::media::FrameCache*>(frameCache_);
     QVector<void*> layerTextures(int(snapshot.layers.size()), nullptr);
     for (int i = 0; i < int(snapshot.layers.size()); ++i) {
-        TexturePool::Key key;
-        key.size   = QSize(16, 16);   ///< プレースホルダ
-        key.format = 0;
-        layerTextures[i] = impl_->texturePool->acquire(key);
-        impl_->texturePool->release(layerTextures[i]);   ///< 今フレームのみ使用
+        const LayerItem& layer = snapshot.layers[size_t(i)];
+
+        // VideoSourceRef の場合、FrameCache からピクセルを取得してテクスチャへアップロード
+        if (auto* vsr = std::get_if<VideoSourceRef>(&layer.source)) {
+            if (frameCache) {
+                auto cachedFrame = frameCache->get(vsr->assetId, vsr->sourceFrameIndex);
+                if (cachedFrame && !cachedFrame->pixels.isEmpty()) {
+                    TexturePool::Key key;
+                    key.size   = cachedFrame->size;
+                    key.format = 0;  // RGBA8
+                    void* tex = impl_->texturePool->acquire(key);
+                    if (tex) {
+                        pendingUploads.push_back({
+                            static_cast<QRhiTexture*>(tex),
+                            cachedFrame->pixels,
+                            cachedFrame->size
+                        });
+                        layerTextures[i] = tex;
+                    }
+                }
+            }
+            // FrameCache が未接続 or キャッシュミス時はプレースホルダ
+            if (!layerTextures[i]) {
+                TexturePool::Key key;
+                key.size   = QSize(16, 16);
+                key.format = 0;
+                layerTextures[i] = impl_->texturePool->acquire(key);
+                impl_->texturePool->release(layerTextures[i]);
+            }
+        } else {
+            // VideoSourceRef 以外 (字幕 / AI 生成物) はプレースホルダ
+            TexturePool::Key key;
+            key.size   = QSize(16, 16);
+            key.format = 0;
+            layerTextures[i] = impl_->texturePool->acquire(key);
+            impl_->texturePool->release(layerTextures[i]);
+        }
     }
 
     // ---- (3) COMPOSITE: 背面 -> 前面 -------------------------------------
     int ping = impl_->currentTarget;
     const int layerCount = int(snapshot.layers.size());
+
+    // レイヤーが無い場合は合成 RT を黒でクリアして返す (未定義領域の表示を防ぐ)
+    if (layerCount == 0) {
+        QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
+        cb->beginPass(impl_->renderTarget[ping].get(), Qt::black,
+                      QRhiDepthStencilClearValue(1.0f, 0), batch);
+        cb->endPass();
+        impl_->currentTarget = ping;
+        return impl_->rtTex[ping] ? impl_->rtTex[ping].get() : nullptr;
+    }
+
+    // FrameCache から取得したピクセルの GPU アップロードを最初のパスで適用する
+    QRhiResourceUpdateBatch* uploadBatch = rhi->nextResourceUpdateBatch();
+    for (const auto& up : pendingUploads) {
+        QImage img(reinterpret_cast<const uchar*>(up.pixels.constData()),
+                   up.size.width(), up.size.height(),
+                   up.size.width() * 4, QImage::Format_ARGB32);
+        uploadBatch->uploadTexture(up.tex, img);
+    }
+
     for (int i = 0; i < layerCount; ++i) {
         const LayerItem& layer = snapshot.layers[size_t(i)];
         if (!layerTextures[i])
@@ -289,8 +449,12 @@ void* RhiCompositor::renderFrame(const RenderSnapshot& snapshot)
                 }
                 ++i;                        ///< 対の 2 枚目は処理済み
                 const int pong = 1 - ping;
+                void* preBatch = (uploadBatch) ? uploadBatch : nullptr;
                 impl_->layerPass->draw(cb, impl_->renderTarget[pong].get(),
-                                       srcTex, impl_->rtTex[ping].get(), *composited);
+                                       srcTex, impl_->rtTex[ping].get(), *composited,
+                                       preBatch);
+                if (uploadBatch)
+                    uploadBatch = nullptr;
                 ping = pong;
                 continue;
             }
@@ -300,18 +464,74 @@ void* RhiCompositor::renderFrame(const RenderSnapshot& snapshot)
         srcTex = impl_->applyFilters(cb, srcTex, layer.filters);
 
         const int pong = 1 - ping;
+        // 最初のレイヤーに限り、FrameCache からのテクスチャアップロードバッチを適用
+        void* preBatch = (i == 0 && uploadBatch) ? uploadBatch : nullptr;
         impl_->layerPass->draw(cb,
                                impl_->renderTarget[pong].get(),
                                srcTex,
-                               impl_->rtTex[ping].get(), *composited);
+                               impl_->rtTex[ping].get(), *composited, preBatch);
+        if (i == 0)
+            uploadBatch = nullptr;   ///< 適用済み
         ping = pong;
     }
     impl_->currentTarget = ping;
 
-    // ---- (5) STATS: GPU タイムスタンプ収集は PerfMonitor へ (将来拡張) ----
-    rhi->endOffscreenFrame();
-
     return impl_->rtTex[ping] ? impl_->rtTex[ping].get() : nullptr;
+}
+
+void RhiCompositor::present(void* commandBufferPtr, void* renderTargetPtr,
+                            void* compositePtr)
+{
+    if (!impl_ || !impl_->rhi || !commandBufferPtr || !renderTargetPtr || !compositePtr)
+        return;
+
+    auto* cb         = static_cast<QRhiCommandBuffer*>(commandBufferPtr);
+    auto* rt         = static_cast<QRhiRenderTarget*>(renderTargetPtr);
+    auto* composite  = static_cast<QRhiTexture*>(compositePtr);
+
+    if (impl_->uvVertData.isEmpty() || impl_->blendFragData.isEmpty())
+        return;
+    impl_->ensurePresentPipeline(rt);
+    if (!impl_->presentReady || !impl_->presentPipeline)
+        return;
+
+    PresentUniforms u;
+    u.transform.setToIdentity();
+    u.cropRect  = QVector4D(0.0f, 0.0f, 1.0f, 1.0f);
+    u.opacity   = 1.0f;
+    u.blendMode = 0;    ///< Normal
+    u.colorSpace = 0;
+    u.pad        = 0.0f;
+
+    static const float vertexData[] = {
+        -1.0f, -1.0f, 0.0f, 1.0f,
+         3.0f, -1.0f, 2.0f, 1.0f,
+        -1.0f,  3.0f, 0.0f, -1.0f,
+    };
+
+    QList<QRhiShaderResourceBinding> bindings;
+    bindings.append(QRhiShaderResourceBinding::uniformBuffer(
+        0, QRhiShaderResourceBinding::FragmentStage, impl_->presentUbuf.get()));
+    bindings.append(QRhiShaderResourceBinding::sampledTexture(
+        1, QRhiShaderResourceBinding::FragmentStage, composite, impl_->presentSampler.get()));
+    bindings.append(QRhiShaderResourceBinding::sampledTexture(
+        2, QRhiShaderResourceBinding::FragmentStage, composite, impl_->presentSampler.get()));
+    impl_->presentSrb->setBindings(bindings.cbegin(), bindings.cend());
+    impl_->presentSrb->create();
+
+    QRhiResourceUpdateBatch* batch = impl_->rhi->nextResourceUpdateBatch();
+    batch->updateDynamicBuffer(impl_->presentVbuf.get(), 0, sizeof(vertexData), vertexData);
+    batch->updateDynamicBuffer(impl_->presentUbuf.get(), 0, sizeof(u), &u);
+
+    cb->beginPass(rt, Qt::black, QRhiDepthStencilClearValue(1.0f, 0), batch);
+    cb->setGraphicsPipeline(impl_->presentPipeline.get());
+    cb->setViewport(QRhiViewport(0, 0, float(rt->pixelSize().width()),
+                                 float(rt->pixelSize().height())));
+    cb->setShaderResources(impl_->presentSrb.get());
+    const QRhiCommandBuffer::VertexInput vb(impl_->presentVbuf.get(), 0);
+    cb->setVertexInput(0, 1, &vb);
+    cb->draw(3);
+    cb->endPass();
 }
 
 } // namespace yave::render

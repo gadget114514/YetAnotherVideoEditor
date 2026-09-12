@@ -131,11 +131,11 @@ Item {
         property bool dragActive: drag.active
 
         onPressed: function(mouse) {
-            root.clicked()
             if (mouse.button === Qt.RightButton) {
                 root.contextMenuRequested()
                 return
             }
+            root.clicked()
             dragProxy.x = 0
             dragProxy.y = 0
         }
@@ -152,6 +152,9 @@ Item {
         Drag.active: dragArea.dragActive
         Drag.dragType: Drag.Automatic
         Drag.supportedActions: Qt.CopyAction
+        // DropArea 側の keys フィルタを通すため必須。無いと onDropped が来ない。
+        Drag.keys: root.itemAssetId !== "" ? ["yave/library-item", "yave/asset-id"]
+                                           : ["yave/library-item"]
         // メディアだけは後方互換のキーも載せる。タイムラインの既存 DropArea が
         // そのまま動く (1.7.5)。
         Drag.mimeData: root.itemAssetId !== ""

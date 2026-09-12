@@ -40,6 +40,7 @@ void ImportSubtitleCommand::doRedo()
 {
     createdTrackIndices_.clear();
     insertedClips_.clear();
+    baseTrackIndex_ = -1;
 
     Timeline* tl = project()->timeline();
 
@@ -49,6 +50,7 @@ void ImportSubtitleCommand::doRedo()
         baseIndex = tl->indexOfTrack(t);
         createdTrackIndices_.push_back(baseIndex);
     }
+    baseTrackIndex_ = baseIndex;
 
     int64_t prevEnd = std::numeric_limits<int64_t>::min();
 

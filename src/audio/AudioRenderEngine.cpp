@@ -54,6 +54,12 @@ bool AudioRenderEngine::openDevice(const QString& deviceId, int sampleRate,
     clock_.setSampleRate(device_->sampleRate());
     clock_.setOutputLatencySamples(device_->outputLatencySamples());
 
+    // トラックごとのミックス用スクラッチを事前確保する (RT 内で確保しない)。
+    // デバイスの最大ブロックより少し大きめに取る。
+    const int scratchCh    = 2;
+    const int scratchFrames = std::max(64, device_->bufferFrames() * 2);
+    scratch_.assign(size_t(scratchCh), std::vector<float>(size_t(scratchFrames), 0.0f));
+
     emit deviceOpened();
     return true;
 }
@@ -147,7 +153,7 @@ void AudioRenderEngine::setLoopRange(const TimeRange& r, bool enabled)
 
 void AudioRenderEngine::rebuildGraph(const Timeline& timeline, const Project& project)
 {
-    auto graph = AudioRenderGraphBuilder::build(timeline, project);
+    auto graph = AudioRenderGraphBuilder::build(timeline, project, sourceProvider_);
     // PDC を計算して反映
     const int64_t pluginLatency =
         pdcEnabled_ ? DelayCompensator::compute(*graph) : 0;
@@ -290,16 +296,85 @@ float* const* AudioRenderEngine::trackScratch(int channels, int frames) noexcept
     return scratchPtrs_.data();
 }
 
-void AudioRenderEngine::mixClipsInto(TrackNode&, int64_t, int, float* const*, int) noexcept
+void AudioRenderEngine::mixClipsInto(TrackNode& t, int64_t blockStart, int numFrames,
+                                     float* const* buf, int channels) noexcept
 {
-    // PCM データは事前デコード済みバッファ (ClipSource::preloadedData) から
-    // コピーする。現行ビルドではデコーダ未接続のため無音のまま返す。
+    // クリップの PCM を ClipSource::preloadedData からミックスする。
+    // すべて RT 事前確保済みバッファのみを触る (RT 内で確保しない)。
+    for (const ClipSource& src : t.clips)
+        mixClipBlock(buf, channels, numFrames, blockStart, src);
 }
 
-void AudioRenderEngine::processEffect(yave::IAudioEffectNode*, float* const*, int, int) noexcept
+namespace {
+
+void mixClipBlockImpl(float* const* buf, int channels, int numFrames,
+                      int64_t blockStart, const ClipSource& src) noexcept
 {
-    // Vst3ProcessorNode::processRt への委譲ポイント。
-    // VST3 ホストが有効なビルドでのみ実処理が入る。
+    if (!src.preloadedData || src.preloadedFrames <= 0)
+        return;
+
+    const int64_t blockEnd = blockStart + numFrames;
+    if (src.timelineEnd <= blockStart || src.timelineStart >= blockEnd)
+        return;
+
+    const int64_t outStart = std::max<int64_t>(blockStart, src.timelineStart);
+    const int64_t outEnd   = std::min<int64_t>(blockEnd, src.timelineEnd);
+    if (outStart >= outEnd)
+        return;
+
+    const int64_t srcBase = src.sourceOffset + (outStart - src.timelineStart);
+    const int64_t totalLen = src.timelineEnd - src.timelineStart;
+
+    // クリップごとのパン (等価パワー)
+    const float angle = (src.pan + 1.0f) * 0.5f * 1.5707963267948966f;
+    const float lGain = src.gain * std::cos(angle);
+    const float rGain = src.gain * std::sin(angle);
+
+    const int srcCh = std::min<int>(src.channels, channels);
+
+    for (int64_t i = 0; i < outEnd - outStart; ++i) {
+        const int64_t s = srcBase + i;
+        if (s < 0 || s >= src.preloadedFrames)
+            continue;
+        const int outIdx = int(outStart - blockStart + i);
+
+        // フェードイン / フェードアウト
+        const int64_t inClip = outStart - src.timelineStart + i;
+        float fade = 1.0f;
+        if (src.fadeInSamples > 0 && inClip < src.fadeInSamples)
+            fade = float(inClip) / float(src.fadeInSamples);
+        else if (src.fadeOutSamples > 0 && inClip >= totalLen - src.fadeOutSamples)
+            fade = float(totalLen - inClip) / float(src.fadeOutSamples);
+
+        if (srcCh >= 2 && channels >= 2) {
+            buf[0][outIdx] += src.preloadedData[0][s] * lGain * fade;
+            buf[1][outIdx] += src.preloadedData[1][s] * rGain * fade;
+        } else if (channels >= 2) {
+            const float v = src.preloadedData[0][s] * fade;
+            buf[0][outIdx] += v * lGain;
+            buf[1][outIdx] += v * rGain;
+        } else {
+            buf[0][outIdx] += src.preloadedData[0][s] * src.gain * fade;
+        }
+    }
+}
+
+} // anonymous namespace
+
+void mixClipBlock(float* const* buf, int channels, int numFrames,
+                  int64_t blockStart, const ClipSource& src) noexcept
+{
+    mixClipBlockImpl(buf, channels, numFrames, blockStart, src);
+}
+
+void AudioRenderEngine::processEffect(yave::IAudioEffectNode* fx,
+                                       float* const* buf, int channels, int frames) noexcept
+{
+    // IAudioEffectNode::processRt へ委譲する。
+    // Vst3ProcessorNode が processRt をオーバーライドして VST3 プラグインの
+    // process() を呼ぶ。デフォルト実装はノーオーパー。
+    if (fx)
+        fx->processRt(buf, channels, frames);
 }
 
 void AudioRenderEngine::accumulateWithGainPan(float* const* src, float* const* dst,

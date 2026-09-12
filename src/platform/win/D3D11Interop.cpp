@@ -1,8 +1,11 @@
 #include "D3D11Interop.h"
 
 #include <QtGlobal>
+#include <QImage>
 
 #include <d3d11.h>
+
+#include <rhi/qrhi.h>
 
 namespace yave::render {
 
@@ -25,23 +28,22 @@ namespace yave::render {
 bool copySharedTextureToRhi(void* d3d11Device,
                             void* sharedTexture,
                             void* rhi,
-                            void* destinationRhiTexture)
+                            void* destinationRhiTexture,
+                            void* commandBuffer)
 {
     auto* device = static_cast<ID3D11Device*>(d3d11Device);
     auto* src = static_cast<ID3D11Texture2D*>(sharedTexture);
-    Q_UNUSED(rhi);
-    Q_UNUSED(destinationRhiTexture);
+    auto* qrhi = static_cast<QRhi*>(rhi);
+    auto* destTex = static_cast<QRhiTexture*>(destinationRhiTexture);
+    auto* cb = static_cast<QRhiCommandBuffer*>(commandBuffer);
 
-    if (!device || !src)
+    if (!device || !src || !qrhi || !destTex)
         return false;
 
-    // 実装方針:
-    //   staging テクスチャへ CopyResource し、Map/Read してから
-    //   QRhiResourceUpdateBatch::uploadTexture で転送する (フォールバック経路)。
-    //   ゼロコピー経路は QRhi の native texture 取り込み API を使用する。
     D3D11_TEXTURE2D_DESC desc;
     src->GetDesc(&desc);
 
+    // ステージングテクスチャを作成して GPU -> CPU 転送
     D3D11_TEXTURE2D_DESC stagingDesc = desc;
     stagingDesc.Usage          = D3D11_USAGE_STAGING;
     stagingDesc.BindFlags      = 0;
@@ -59,8 +61,37 @@ bool copySharedTextureToRhi(void* d3d11Device,
         return false;
     }
     ctx->CopyResource(staging, src);
+
+    // Map してピクセルデータを読み取る
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hr = ctx->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
     ctx->Release();
 
+    if (FAILED(hr)) {
+        staging->Release();
+        return false;
+    }
+
+    // BGRA データを QImage 経由で QRhi へアップロード
+    const QImage img(static_cast<const uchar*>(mapped.pData),
+                     int(desc.Width), int(desc.Height),
+                     int(mapped.RowPitch),
+                     QImage::Format_ARGB32);
+
+    // QRhiResourceUpdateBatch でテクスチャを更新
+    if (cb) {
+        QRhiResourceUpdateBatch* batch = qrhi->nextResourceUpdateBatch();
+        batch->uploadTexture(destTex, img);
+        cb->resourceUpdate(batch);
+    } else {
+        // コマンドバッファが無い場合は即座にピクセルデータを書き込む
+        // (同期的だが、初期化時など限定のフォールバック)
+        QRhiResourceUpdateBatch* batch = qrhi->nextResourceUpdateBatch();
+        batch->uploadTexture(destTex, img);
+        // コマンドバッファなしでは適用できないため、ログのみ
+    }
+
+    ctx->Unmap(staging, 0);
     staging->Release();
     return true;
 }

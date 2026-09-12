@@ -18,7 +18,7 @@ set(YAVE_RENDER_SOURCES
 add_library(yave_render STATIC ${YAVE_RENDER_SOURCES})
 yave_apply_common_settings(yave_render)
 target_link_libraries(yave_render
-    PUBLIC yave_core Qt6::Core Qt6::Gui)
+    PUBLIC yave_core yave_media Qt6::Core Qt6::Gui)
 
 # QRhi は QtGui のセミパブリック API。プライベートヘッダパスが必要。
 # Qt6Gui_PRIVATE_INCLUDE_DIRS が空の環境向けに、バージョン付きパスも明示的に足す。

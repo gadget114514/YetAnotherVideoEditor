@@ -53,6 +53,9 @@ public:
     /// effectId でプロトタイプを引く。組み込みを先に見る。無ければ nullptr。
     const yave::sdk::ISubtitleEffect* prototype(const QString& effectId) const;
 
+    /// 全プロトタイプ (組み込み + 外部) を列挙する。
+    std::vector<const yave::sdk::ISubtitleEffect*> allPrototypes() const;
+
     /// 新しいインスタンスを生成する。所有は呼び出し側。
     /// 外部プラグイン由来の場合、deleter が destroyEffect を呼ぶ。
     SubtitleEffectPtr createInstance(const QString& effectId) const;

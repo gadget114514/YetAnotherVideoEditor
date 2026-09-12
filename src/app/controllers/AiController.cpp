@@ -7,9 +7,12 @@ namespace yave {
 
 AiController::AiController(QObject* parent) : QObject(parent) {}
 
+AiController::~AiController() = default;
+
 void AiController::attachProject(Project* project)
 {
     project_ = project;
+    orchestrator_ = std::make_unique<ai::AiGenerationOrchestrator>(project_);
 }
 
 ai::AiGenerationParams AiController::paramsFromRequest(const QVariantMap& m) const
@@ -49,13 +52,16 @@ QVariantMap AiController::submitTask(const QVariantMap& request)
         return out;
     }
 
-    // Orchestrator は app 層で生成済み。ProjectController 経由で取得する設計だが、
-    // 簡略化のためここでは遅延生成する。
-    static ai::AiGenerationOrchestrator orchestrator(project_);
-    orchestrator.setAutoCommit(project_->isAutoCommitAi());
+    if (!orchestrator_) {
+        out[QStringLiteral("ok")] = false;
+        out[QStringLiteral("errorKey")] = QStringLiteral("error.ai.noOrchestrator");
+        return out;
+    }
+
+    orchestrator_->setAutoCommit(project_->isAutoCommitAi());
 
     const auto params = paramsFromRequest(request);
-    const QUuid id = orchestrator.submit(params);
+    const QUuid id = orchestrator_->submit(params);
 
     out[QStringLiteral("ok")]      = !id.isNull();
     out[QStringLiteral("taskId")]  = id.toString(QUuid::WithoutBraces);
@@ -66,17 +72,20 @@ QVariantMap AiController::submitTask(const QVariantMap& request)
 
 void AiController::cancel(const QUuid& taskId)
 {
-    static_cast<void>(taskId);
+    if (orchestrator_)
+        orchestrator_->cancel(taskId);
 }
 
 void AiController::commit(const QUuid& taskId)
 {
-    static_cast<void>(taskId);
+    if (orchestrator_)
+        orchestrator_->commit(taskId);
 }
 
 void AiController::discard(const QUuid& taskId)
 {
-    static_cast<void>(taskId);
+    if (orchestrator_)
+        orchestrator_->discard(taskId);
 }
 
 } // namespace yave

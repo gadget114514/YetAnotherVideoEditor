@@ -42,6 +42,14 @@ protected:
     void doRedo() override;
     void doUndo() override;
 
+public:
+    /// doRedo 実行後に実際に挿入できたクリップ数 (重なりでスキップされた分は除く)。
+    size_t insertedCount() const { return insertedClips_.size(); }
+
+    /// 取り込み先の先頭トラック (ベース) のインデックス。実行前は -1。
+    /// SplitToNewTracks で追加トラックを作った場合も先頭側の値を返す。
+    int baseTrackIndex() const { return baseTrackIndex_; }
+
 private:
     Track* ensureTrack(int baseIndex, int overflowLevel);
 
@@ -49,6 +57,7 @@ private:
     OverlapPolicy                      policy_;
     int                                targetTrackIndex_;
     TrackType                          trackType_;
+    int                                baseTrackIndex_ = -1;
 
     // Undo 用の記録
     std::vector<int> createdTrackIndices_;

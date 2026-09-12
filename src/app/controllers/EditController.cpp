@@ -13,10 +13,15 @@
 #include "../../core/commands/SplitClipCommand.h"
 #include "../../core/commands/FilterCommands.h"
 #include "../../core/commands/TransitionCommands.h"
+#include "../../core/commands/SetPropertyCommands.h"
 #include "../../core/Transition.h"
 #include "../../core/VideoFilter.h"
 #include "../../subtitle/TitleClip.h"
 #include "../../subtitle/commands/AddSubtitleEffectCommand.h"
+#include "../../subtitle/commands/EditSubtitleTextCommand.h"
+#include "../../subtitle/commands/SetSubtitleStyleCommand.h"
+#include "../../subtitle/io/SrtParser.h"
+#include "../../core/commands/ImportSubtitleCommand.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -126,9 +131,13 @@ bool EditController::dropLibraryItem(const QString& payloadJson, const QUuid& tr
 {
     lastDropError_.clear();
 
+    qInfo() << "[dropLibraryItem] payload:" << payloadJson << "trackId:" << trackId
+            << "frame:" << frame << "targetClipId:" << targetClipId;
+
     const auto fail = [this](const QString& reason) {
         lastDropError_ = reason;
         emit dropRejected(reason);
+        qInfo() << "[dropLibraryItem] REJECTED:" << reason;
         return false;
     };
 
@@ -251,20 +260,37 @@ bool EditController::addAssetClip(int trackIndex, const QUuid& trackId, const QS
     if (!project_)
         return false;
 
-    QUuid assetId(assetIdStr);
-    auto clip = std::make_shared<VideoClip>(assetId);
-    clip->setRange({startFrame, durationFrames});
+    const QUuid assetId(assetIdStr);
+    const Asset* asset = project_->assets()->asset(assetId);
 
-    // アセットの情報を探して、名前や最大フレーム数をコピーする
-    if (auto* asset = project_->assets()->asset(assetId)) {
-        clip->setName(QFileInfo(asset->resolvedAbsolutePath).fileName());
-        clip->setMaxDurationFrames(asset->durationFrames);
+    Track* dstTrack = project_->timeline()->trackById(trackId);
+    qInfo() << "[addAssetClip] assetId:" << assetIdStr << "assetFound:" << (asset != nullptr)
+            << "assetKind:" << (asset ? int(asset->kind) : -1)
+            << "trackType:" << (dstTrack ? int(dstTrack->type()) : -1)
+            << "startFrame:" << startFrame << "durationFrames:" << durationFrames;
+
+    std::shared_ptr<Clip> clip;
+    if (asset && asset->kind == Asset::Kind::Audio) {
+        auto audioClip = std::make_shared<AudioClip>(assetId);
+        audioClip->setRange({startFrame, durationFrames});
+        audioClip->setName(QFileInfo(asset->resolvedAbsolutePath).fileName());
+        audioClip->setMaxDurationFrames(asset->durationFrames);
+        clip = std::move(audioClip);
     } else {
-        clip->setName(tr("Clip"));
+        auto videoClip = std::make_shared<VideoClip>(assetId);
+        videoClip->setRange({startFrame, durationFrames});
+        if (asset) {
+            videoClip->setName(QFileInfo(asset->resolvedAbsolutePath).fileName());
+            videoClip->setMaxDurationFrames(asset->durationFrames);
+        } else {
+            videoClip->setName(tr("Clip"));
+        }
+        clip = std::move(videoClip);
     }
 
     auto* cmd = new AddClipCommand(project_, trackId, trackIndex, clip);
     project_->undoStack()->push(cmd);
+    qInfo() << "[addAssetClip] inserted:" << cmd->wasInserted();
     return true;
 }
 
@@ -408,6 +434,148 @@ void EditController::redo() const
 {
     if (project_)
         project_->undoStack()->redo();
+}
+
+// ===========================================================================
+//  インスペクタ (1.7.1 inspector)
+// ===========================================================================
+
+namespace {
+
+ClipProperty clipPropertyFromKey(const QString& key)
+{
+    if (key == QLatin1String("name"))         return ClipProperty::Name;
+    if (key == QLatin1String("start"))        return ClipProperty::Start;
+    if (key == QLatin1String("duration"))     return ClipProperty::Duration;
+    if (key == QLatin1String("sourceOffset")) return ClipProperty::SourceOffset;
+    if (key == QLatin1String("opacity"))      return ClipProperty::Opacity;
+    if (key == QLatin1String("blendMode"))    return ClipProperty::BlendMode;
+    if (key == QLatin1String("fadeIn"))       return ClipProperty::FadeIn;
+    if (key == QLatin1String("fadeOut"))      return ClipProperty::FadeOut;
+    if (key == QLatin1String("enabled"))      return ClipProperty::Enabled;
+    if (key == QLatin1String("locked"))       return ClipProperty::Locked;
+    if (key == QLatin1String("gain"))         return ClipProperty::Gain;
+    if (key == QLatin1String("pan"))          return ClipProperty::Pan;
+    return ClipProperty::Name;
+}
+
+TrackProperty trackPropertyFromKey(const QString& key)
+{
+    if (key == QLatin1String("name"))      return TrackProperty::Name;
+    if (key == QLatin1String("gain"))      return TrackProperty::Gain;
+    if (key == QLatin1String("pan"))       return TrackProperty::Pan;
+    if (key == QLatin1String("muted"))     return TrackProperty::Muted;
+    if (key == QLatin1String("solo"))      return TrackProperty::Solo;
+    if (key == QLatin1String("opacity"))   return TrackProperty::Opacity;
+    if (key == QLatin1String("blendMode")) return TrackProperty::BlendMode;
+    if (key == QLatin1String("visible"))   return TrackProperty::Visible;
+    if (key == QLatin1String("locked"))    return TrackProperty::Locked;
+    if (key == QLatin1String("height"))    return TrackProperty::UiHeight;
+    return TrackProperty::Name;
+}
+
+} // anonymous namespace
+
+void EditController::setClipProperty(const QString& clipId, const QString& prop,
+                                     const QVariant& value)
+{
+    if (!project_)
+        return;
+    project_->undoStack()->push(new SetClipPropertyCommand(
+        project_, QUuid(clipId), clipPropertyFromKey(prop), value));
+}
+
+void EditController::setSubtitleText(const QString& clipId, const QString& text)
+{
+    if (!project_)
+        return;
+    project_->undoStack()->push(
+        new subtitle::EditSubtitleTextCommand(project_, QUuid(clipId), text));
+}
+
+void EditController::setSubtitleStyle(const QString& clipId, const QString& prop,
+                                      const QVariant& value)
+{
+    if (!project_)
+        return;
+    const auto field = subtitle::subtitleStyleFieldFromName(prop);
+    if (!field)
+        return;
+    project_->undoStack()->push(
+        new subtitle::SetSubtitleStyleCommand(project_, QUuid(clipId), *field, value));
+}
+
+// ===========================================================================
+//  字幕 SRT 取り込み
+// ===========================================================================
+
+QVariantMap EditController::importSrt(const QString& path, const QVariantMap& options)
+{
+    QVariantMap result;
+    result[QStringLiteral("ok")]            = false;
+    result[QStringLiteral("importedCount")] = 0;
+    result[QStringLiteral("trackId")]       = QString();
+    result[QStringLiteral("trackIndex")]    = -1;
+    result[QStringLiteral("warnings")]      = QStringList();
+
+    if (!project_)
+        return result;
+
+    const subtitle::SrtParseResult parsed = subtitle::SrtParser::parseFile(path);
+    QStringList warnings = parsed.warnings;
+    if (!parsed.ok) {
+        result[QStringLiteral("warnings")] = warnings;
+        return result;
+    }
+
+    const int overlapPolicyInt = options.value(QStringLiteral("overlapPolicy"), 0).toInt();
+    OverlapPolicy policy = OverlapPolicy::SplitToNewTracks;
+    if (overlapPolicyInt == 1)
+        policy = OverlapPolicy::TrimPrevious;
+    else if (overlapPolicyInt == 2)
+        policy = OverlapPolicy::SkipOverlapping;
+
+    const int targetTrackIndex = options.value(QStringLiteral("targetTrackIndex"), -1).toInt();
+    const QString stylePresetId =
+        options.value(QStringLiteral("stylePresetId"), QStringLiteral("default")).toString();
+    const qint64 fadeInFrames  = options.value(QStringLiteral("fadeInFrames"), 0).toLongLong();
+    const qint64 fadeOutFrames = options.value(QStringLiteral("fadeOutFrames"), 0).toLongLong();
+
+    QStringList convertWarnings;
+    auto clips = subtitle::convertCuesToClips(parsed, project_->timebase(), stylePresetId,
+                                              &convertWarnings);
+    warnings += convertWarnings;
+
+    for (auto& c : clips) {
+        c->setFadeInFrames(fadeInFrames);
+        c->setFadeOutFrames(fadeOutFrames);
+    }
+
+    std::vector<std::shared_ptr<Clip>> genericClips(clips.begin(), clips.end());
+    auto* cmd = new ImportSubtitleCommand(project_, std::move(genericClips), policy,
+                                          targetTrackIndex, TrackType::Subtitle,
+                                          QFileInfo(path).fileName());
+    project_->undoStack()->push(cmd);
+
+    result[QStringLiteral("ok")]            = true;
+    result[QStringLiteral("importedCount")] = int(cmd->insertedCount());
+    const int baseIdx = cmd->baseTrackIndex();
+    result[QStringLiteral("trackIndex")]    = baseIdx;
+    if (baseIdx >= 0) {
+        if (Track* t = project_->timeline()->trackAt(baseIdx))
+            result[QStringLiteral("trackId")] = t->id().toString(QUuid::WithoutBraces);
+    }
+    result[QStringLiteral("warnings")] = warnings;
+    return result;
+}
+
+void EditController::setTrackProperty(const QString& trackId, const QString& prop,
+                                      const QVariant& value)
+{
+    if (!project_)
+        return;
+    project_->undoStack()->push(new SetTrackPropertyCommand(
+        project_, QUuid(trackId), trackPropertyFromKey(prop), value));
 }
 
 QVariantList EditController::snapCandidates(qint64 visibleStart,

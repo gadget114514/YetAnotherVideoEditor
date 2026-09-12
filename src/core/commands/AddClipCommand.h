@@ -20,6 +20,9 @@ public:
     AddClipCommand(Project* project, const QUuid& trackId, int trackIndex,
                    const std::shared_ptr<Clip>& clip);
 
+    /// デバッグ用: 実際に挿入できたか (重なりで no-op になっていないか)。
+    bool wasInserted() const { return inserted_; }
+
 protected:
     void doRedo() override;
     void doUndo() override;

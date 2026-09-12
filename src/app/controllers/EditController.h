@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QUuid>
+#include <QVariantMap>
 
 namespace yave {
 
@@ -76,6 +77,43 @@ public:
     /// Undo / Redo。QML のメニューから呼ぶ。
     Q_INVOKABLE void undo() const;
     Q_INVOKABLE void redo() const;
+
+    // ================= インスペクタ (1.7.1 inspector) =================
+
+    /// クリップのプロパティを Undo 可能に変更する。prop は "name" / "start" /
+    /// "duration" / "sourceOffset" / "opacity" / "blendMode" / "fadeIn" /
+    /// "fadeOut" / "enabled" / "locked" / "gain" / "pan"。
+    Q_INVOKABLE void setClipProperty(const QString& clipId, const QString& prop,
+                                     const QVariant& value);
+
+    /// 字幕 / タイトルクリップのテキストを Undo 可能に編集する。
+    Q_INVOKABLE void setSubtitleText(const QString& clipId, const QString& text);
+
+    /// 字幕 / タイトルクリップのスタイル差分を Undo 可能に編集する。
+    /// prop は "fontFamily" / "fillColor" / "fontPointSize" / "anchor" など
+    /// SubtitleStyleDiff のフィールド名。value が null ならプリセット値へ戻す。
+    Q_INVOKABLE void setSubtitleStyle(const QString& clipId, const QString& prop,
+                                      const QVariant& value);
+
+    // ================= 字幕 SRT 取り込み =================
+
+    /// SRT ファイルを読み込み、字幕トラックへ一括で取り込む。
+    ///
+    /// options:
+    ///   overlapPolicy: 0=別トラックへ振り分け(既定) 1=前のキューを短縮 2=重なるものをスキップ
+    ///   targetTrackIndex: -1(既定)=末尾に新しい字幕トラックを作る。既存トラック番号を指定するとそこへ
+    ///   stylePresetId: 取り込むクリップに割り当てるスタイルプリセット (既定 "default")
+    ///   fadeInFrames / fadeOutFrames: 出方 / 消去時のフェード (既定 0)
+    ///
+    /// 戻り値: ok, importedCount, trackId, trackIndex, warnings(QStringList)。
+    Q_INVOKABLE QVariantMap importSrt(const QString& path,
+                                      const QVariantMap& options = {});
+
+    /// トラックのプロパティを Undo 可能に変更する。prop は "name" / "gain" /
+    /// "pan" / "muted" / "solo" / "opacity" / "blendMode" / "visible" /
+    /// "locked" / "height"。
+    Q_INVOKABLE void setTrackProperty(const QString& trackId, const QString& prop,
+                                      const QVariant& value);
 
     /// ドラッグ中のスナップ候補 (3.8.3)
     Q_INVOKABLE QVariantList snapCandidates(qint64 visibleStart, qint64 visibleEnd) const;

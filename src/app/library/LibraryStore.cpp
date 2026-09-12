@@ -6,6 +6,7 @@
 #include "../../core/VideoFilter.h"
 #include "../../subtitle/TitleClip.h"
 #include "../../plugin/SubtitleEffectRegistry.h"
+#include "../../plugin/PluginManager.h"
 #include "../../subtitle/effects/BuiltinEffects.h"
 
 #include <yave/sdk/ISubtitleEffect.h>
@@ -177,8 +178,25 @@ void LibraryStore::rebuildCatalog()
             QStringLiteral("effect"));
     }
 
-    // 外部プラグイン由来のエフェクト / AviUtl フィルタは、走査完了後に
-    // PluginManager から足す (8章)。現状は列挙 API が無いため未接続。
+    // 外部プラグイン由来のエフェクトを列挙してカタログへ追加する
+    {
+        auto* pm = &plugin::PluginManager::instance();
+        for (const auto* proto : pm->allSubtitleEffectPrototypes()) {
+            if (!proto)
+                continue;
+            // 組み込みは既に追加済みなのでスキップ
+            bool isBuiltin = false;
+            for (const auto& bp : subtitle::BuiltinEffectRegistry::instance().prototypes()) {
+                if (bp && bp->id() == proto->id()) {
+                    isBuiltin = true;
+                    break;
+                }
+            }
+            if (!isBuiltin)
+                add(LibraryCategory::Effect, proto->id(), humanizeKey(proto->displayName()),
+                    QStringLiteral("effect"));
+        }
+    }
 
     for (auto& item : catalogItems_) {
         item.folderId     = catalogAssignments_.value(item.itemId);
@@ -334,7 +352,11 @@ std::vector<LibraryItem> LibraryStore::items(LibraryCategory cat, const QUuid& f
             item.category       = LibraryCategory::Media;
             item.assetId        = id;
             item.folderId       = folderId;
-            item.name           = QFileInfo(a->relativePath).fileName();
+            // 取り込み直後のアセットは relativePath が空で resolvedAbsolutePath
+            // だけが入る。表示名はどちらか有効な方から取る。
+            const QString path  = a->relativePath.isEmpty()
+                                      ? a->resolvedAbsolutePath : a->relativePath;
+            item.name           = QFileInfo(path).fileName();
             item.kind           = assetKindKey(a->kind);
             item.durationFrames = a->durationFrames;
             item.missing        = a->isMissing;

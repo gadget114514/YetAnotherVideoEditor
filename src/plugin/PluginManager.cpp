@@ -244,6 +244,14 @@ const yave::sdk::ISubtitleEffect* PluginManager::subtitleEffectPrototype(
     return subtitleFx_->prototype(effectId);
 }
 
+std::vector<const yave::sdk::ISubtitleEffect*> PluginManager::allSubtitleEffectPrototypes() const
+{
+    QMutexLocker lock(&mutex_);
+    if (!subtitleFx_)
+        return {};
+    return subtitleFx_->allPrototypes();
+}
+
 SubtitleEffectPtr PluginManager::createSubtitleEffect(const QString& effectId) const
 {
     QMutexLocker lock(&mutex_);

@@ -7,6 +7,7 @@ extern "C" {
 #  include <libavcodec/avcodec.h>
 #  include <libavformat/avformat.h>
 #  include <libavutil/opt.h>
+#  include <libswscale/swscale.h>
 }
 #endif
 
@@ -81,21 +82,85 @@ QString ExportJob::run(ExportProgressFn progress, void* userData)
     }
 
     // ---- フレームループ ----
-    // 実際のピクセル供給は RhiCompositor の readback から受ける。
-    // ここではパイプラインの骨格 (ヘッダ / トレーラ、PTS 管理) を提供する。
     const int64_t totalFrames = settings_.endFrame - settings_.startFrame;
+    const int w = c->width;
+    const int h = c->height;
+
+    // RGBA -> YUV420P 変換用コンテキスト
+    SwsContext* sws = sws_getContext(
+        w, h, AV_PIX_FMT_BGRA, w, h, AV_PIX_FMT_YUV420P,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!sws) {
+        avcodec_free_context(&c);
+        avformat_free_context(fmt);
+        return QStringLiteral("sws_getContext failed");
+    }
+
+    AVFrame* yuvFrame = av_frame_alloc();
+    yuvFrame->format = AV_PIX_FMT_YUV420P;
+    yuvFrame->width  = w;
+    yuvFrame->height = h;
+    av_frame_get_buffer(yuvFrame, 0);
 
     AVPacket* pkt = av_packet_alloc();
 
     for (int64_t i = 0; i < totalFrames && !cancelled_; ++i) {
-        // TODO(composite): RhiCompositor::renderToPixels(frame) -> yuv 変換 -> send_frame
+        // ピクセルデータを供給コールバックから取得
+        QByteArray rgbaPixels;
+        if (pixelProvider_) {
+            rgbaPixels = pixelProvider_(settings_.startFrame + i, w, h);
+        }
+
+        if (!rgbaPixels.isEmpty()) {
+            // RGBA -> YUV420P 変換
+            const uint8_t* srcData[1] = {
+                reinterpret_cast<const uint8_t*>(rgbaPixels.constData())
+            };
+            int srcStride[1] = { w * 4 };
+
+            av_frame_make_writable(yuvFrame);
+            sws_scale(sws, srcData, srcStride, 0, h,
+                      yuvFrame->data, yuvFrame->linesize);
+
+            yuvFrame->pts = i;
+
+            if (avcodec_send_frame(c, yuvFrame) < 0) {
+                cancelled_ = true;
+                break;
+            }
+
+            while (avcodec_receive_packet(c, pkt) == 0) {
+                pkt->stream_index = vs->index;
+                av_packet_rescale_ts(pkt, c->time_base, vs->time_base);
+                if (av_interleaved_write_frame(fmt, pkt) < 0) {
+                    cancelled_ = true;
+                    break;
+                }
+                av_packet_unref(pkt);
+            }
+        }
+
         if (progress && (i % 60 == 0)) {
             if (!progress(double(i) / double(totalFrames), userData))
                 cancelled_ = true;
         }
     }
 
+    // フラッシュ
+    if (!cancelled_) {
+        avcodec_send_frame(c, nullptr);
+        while (avcodec_receive_packet(c, pkt) == 0) {
+            pkt->stream_index = vs->index;
+            av_packet_rescale_ts(pkt, c->time_base, vs->time_base);
+            av_interleaved_write_frame(fmt, pkt);
+            av_packet_unref(pkt);
+        }
+    }
+
     av_packet_free(&pkt);
+    av_frame_free(&yuvFrame);
+    sws_freeContext(sws);
+
     av_write_trailer(fmt);
     if (!(fmt->oformat->flags & AVFMT_NOFILE))
         avio_closep(&fmt->pb);

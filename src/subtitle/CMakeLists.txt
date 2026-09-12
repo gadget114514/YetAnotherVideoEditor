@@ -16,6 +16,10 @@ set(YAVE_SUBTITLE_SOURCES
 
     commands/AddSubtitleEffectCommand.h
     commands/AddSubtitleEffectCommand.cpp
+    commands/EditSubtitleTextCommand.h
+    commands/EditSubtitleTextCommand.cpp
+    commands/SetSubtitleStyleCommand.h
+    commands/SetSubtitleStyleCommand.cpp
 
     effects/BuiltinEffects.h
     effects/BuiltinEffects.cpp

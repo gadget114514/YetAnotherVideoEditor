@@ -7,6 +7,8 @@
 #include <QObject>
 #include <QUuid>
 
+#include <memory>
+
 namespace yave {
 
 class Project;
@@ -18,6 +20,7 @@ class AiController : public QObject
     Q_OBJECT
 public:
     explicit AiController(QObject* parent = nullptr);
+    ~AiController() override;
 
     void attachProject(Project* project);
 
@@ -37,6 +40,7 @@ private:
     ai::AiGenerationParams paramsFromRequest(const QVariantMap& map) const;
 
     Project* project_ = nullptr;
+    std::unique_ptr<ai::AiGenerationOrchestrator> orchestrator_;
 };
 
 } // namespace yave

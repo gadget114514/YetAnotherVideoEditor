@@ -75,6 +75,9 @@ public:
     /// 字幕エフェクトのプロトタイプを取得する (一覧表示 / parameterSchema 用)。
     const yave::sdk::ISubtitleEffect* subtitleEffectPrototype(const QString& effectId) const;
 
+    /// 全字幕エフェクトプロトタイプ (組み込み + 外部プラグイン) を列挙する。
+    std::vector<const yave::sdk::ISubtitleEffect*> allSubtitleEffectPrototypes() const;
+
     /// 字幕エフェクトの新しいインスタンスを生成する。
     /// prepare() の前計算結果をインスタンスが保持するため、
     /// クリップごとに個別のインスタンスが必要になる。

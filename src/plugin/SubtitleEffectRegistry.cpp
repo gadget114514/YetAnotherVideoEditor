@@ -94,6 +94,24 @@ const yave::sdk::ISubtitleEffect* SubtitleEffectRegistry::prototype(
     return nullptr;
 }
 
+std::vector<const yave::sdk::ISubtitleEffect*> SubtitleEffectRegistry::allPrototypes() const
+{
+    std::vector<const yave::sdk::ISubtitleEffect*> result;
+
+    // 組み込みエフェクト
+    for (const auto& fx : builtin_->prototypes())
+        if (fx)
+            result.push_back(fx.get());
+
+    // 外部プラグイン由来のエフェクト
+    for (const auto& e : externals_)
+        for (const auto* fx : e.effects)
+            if (fx)
+                result.push_back(fx);
+
+    return result;
+}
+
 SubtitleEffectPtr SubtitleEffectRegistry::createInstance(const QString& effectId) const
 {
     const yave::sdk::ISubtitleEffect* proto = prototype(effectId);
