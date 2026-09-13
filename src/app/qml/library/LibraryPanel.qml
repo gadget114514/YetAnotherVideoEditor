@@ -108,14 +108,55 @@ Rectangle {
 
     // ---- OS からのファイルドロップ (メディア側のみ) ----
     DropArea {
+        id: fileDropArea
         anchors.fill: parent
         enabled: root.acceptsFileDrop
 
+        // 外部ファイルドロップだけを受ける。keys が無いと内部ドラッグ
+        // (ライブラリアイテムの移動) まで奪ってしまうため。
+        keys: ["text/uri-list"]
+
+        Rectangle {
+            anchors.fill: parent
+            color: fileDropArea.containsDrag ? "#15ffffff" : "transparent"
+            z: 100
+        }
+
+        onEntered: (drag) => {
+            console.log("[libraryFileDrop] ENTERED hasUrls=" + drag.hasUrls
+                        + " hasText=" + drag.hasText)
+        }
+
         onDropped: function(drop) {
-            if (!drop.hasUrls)
+            let urls = drop.urls
+            // QML の DragEvent は外部ドロップの urls を空で渡すことがある
+            // (Qt の既知挙動)。その場合はウィンドウレベルで捕捉した
+            // FileDropFilter の URL を使う。
+            if ((!drop.hasUrls || !urls || urls.length === 0)
+                    && fileDropFilter && fileDropFilter.lastUrls.length > 0)
+                urls = fileDropFilter.lastUrls
+            console.log("[libraryFileDrop] DROPPED urls=" + (urls ? urls.length : 0))
+            if (!urls || urls.length === 0) {
+                console.log("[libraryFileDrop] no urls, ignored")
                 return
-            for (var i = 0; i < drop.urls.length; ++i) {
-                var assetId = projectController.registerAsset(drop.urls[i].toString())
+            }
+
+            for (var i = 0; i < urls.length; ++i) {
+                const urlStr = urls[i].toString()
+                // SRT / VTT は字幕として取り込む (メディアアセットではない)
+                if (/\.(srt|vtt)$/i.test(urlStr)) {
+                    console.log("[libraryFileDrop] SRT url=" + urlStr)
+                    editController.importSrt(urlStr, {
+                        overlapPolicy: 0,
+                        targetTrackIndex: -1,
+                        fadeInFrames: 8,
+                        fadeOutFrames: 8
+                    })
+                    continue
+                }
+                const assetId = projectController.registerAsset(urlStr)
+                console.log("[libraryFileDrop] registerAsset url=" + urlStr
+                            + " -> assetId='" + assetId + "'")
                 // 取り込んだ素材は、いま開いているフォルダへ入れる
                 if (assetId && tree.selectedCategory === 0)
                     projectController.assignAssetToFolder(assetId, tree.selectedFolderId)

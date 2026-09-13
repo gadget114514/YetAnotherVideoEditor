@@ -99,17 +99,21 @@ void TestSubtitleCommands::importSrtOverlapPolicy()
         "1\n00:00:01,000 --> 00:00:03,000\n先頭\n\n"
         "2\n00:00:02,000 --> 00:00:04,000\n重なり\n\n");
 
-    // 既定: 別トラックへ振り分け → 2 トラック
+    // 字幕トラックは重なりを許容するため、policy に関わらず 1 トラックへ全キューが入る
     {
         Project p;
         auto clips = clipsFromSrt(p, srt);
-        p.undoStack()->push(new ImportSubtitleCommand(
+        auto* cmd = new ImportSubtitleCommand(
             &p, std::move(clips), OverlapPolicy::SplitToNewTracks, -1,
-            TrackType::Subtitle, QStringLiteral("test.srt")));
-        QCOMPARE(int(p.timeline()->tracksOfType(TrackType::Subtitle).size()), 2);
+            TrackType::Subtitle, QStringLiteral("test.srt"));
+        p.undoStack()->push(cmd);
+        const auto subs = p.timeline()->tracksOfType(TrackType::Subtitle);
+        QCOMPARE(int(subs.size()), 1);
+        QCOMPARE(int(subs[0]->clipCount()), 2);
+        QCOMPARE(int(cmd->insertedCount()), 2);
     }
 
-    // SkipOverlapping: 重なるキューをスキップ → 1 トラック 1 クリップ
+    // SkipOverlapping も字幕トラックでは無視され、全キューが入る
     {
         Project p;
         auto clips = clipsFromSrt(p, srt);
@@ -119,8 +123,8 @@ void TestSubtitleCommands::importSrtOverlapPolicy()
         p.undoStack()->push(cmd);
         const auto subs = p.timeline()->tracksOfType(TrackType::Subtitle);
         QCOMPARE(int(subs.size()), 1);
-        QCOMPARE(int(subs[0]->clipCount()), 1);
-        QCOMPARE(int(cmd->insertedCount()), 1);
+        QCOMPARE(int(subs[0]->clipCount()), 2);
+        QCOMPARE(int(cmd->insertedCount()), 2);
     }
 }
 

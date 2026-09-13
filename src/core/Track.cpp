@@ -8,7 +8,11 @@
 
 namespace yave {
 
-Track::Track(TrackType type) : id_(QUuid::createUuid()), type_(type) {}
+Track::Track(TrackType type)
+    : id_(QUuid::createUuid())
+    , type_(type)
+    , allowOverlaps_(type == TrackType::Subtitle)
+{}  ///< 字幕トラックは重なりを許容する (複数字幕の同時表示)
 Track::~Track() = default;
 
 // ===========================================================================
@@ -57,16 +61,19 @@ bool Track::insertClip(const std::shared_ptr<Clip>& c)
     const TimeRange r = c->range();
 
     // 重なりチェック: 前後のクリップとの交差を調べる
-    auto it = lowerBoundFor(r.start);
-    if (it != clips_.end() && (*it)->range().start < r.end())
-        return false;
-    if (it != clips_.begin()) {
-        auto prev = std::prev(it);
-        if ((*prev)->range().end() > r.start)
+    // (allowOverlaps_ なら重なりを許す = 字幕トラック)。
+    if (!allowOverlaps_) {
+        auto it = lowerBoundFor(r.start);
+        if (it != clips_.end() && (*it)->range().start < r.end())
             return false;
+        if (it != clips_.begin()) {
+            auto prev = std::prev(it);
+            if ((*prev)->range().end() > r.start)
+                return false;
+        }
     }
 
-    clips_.insert(it, c);
+    clips_.insert(lowerBoundFor(r.start), c);
     assertInvariants();
     return true;
 }
@@ -463,8 +470,10 @@ void Track::assertInvariants() const
         if (i > 0) {
             Q_ASSERT_X(clips_[i - 1]->range().start <= clips_[i]->range().start,
                        "Track::assertInvariants", "clips must be sorted by start");
-            Q_ASSERT_X(!clips_[i - 1]->range().intersects(clips_[i]->range()),
-                       "Track::assertInvariants", "clips must not overlap");
+            // 字幕トラックは重なりを許容する (invariant の例外)
+            if (!allowOverlaps_)
+                Q_ASSERT_X(!clips_[i - 1]->range().intersects(clips_[i]->range()),
+                           "Track::assertInvariants", "clips must not overlap");
         }
     }
 #else

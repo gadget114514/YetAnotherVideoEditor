@@ -13,9 +13,14 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QSettings>
 #include <fstream>
 
 namespace yave {
+
+namespace {
+constexpr auto kLastSavedPathKey = "project/lastSavedPath";
+}
 
 ProjectController::ProjectController(QObject* parent)
     : QObject(parent)
@@ -52,6 +57,7 @@ bool ProjectController::open(const QString& path)
 
     project_ = std::move(loaded);
     projectPath_ = path;
+    QSettings().setValue(QLatin1String(kLastSavedPathKey), path);
     emit projectOpened(path);
     return true;
 }
@@ -68,6 +74,7 @@ bool ProjectController::save()
     }
     project_->clearModified();
     project_->undoStack()->setClean();
+    QSettings().setValue(QLatin1String(kLastSavedPathKey), projectPath_);
     emit projectSaved(projectPath_);
     return true;
 }
@@ -86,6 +93,19 @@ bool ProjectController::restoreAutosave()
     return open(autosave);
 }
 
+QString ProjectController::lastSavedPath() const
+{
+    return QSettings().value(QLatin1String(kLastSavedPathKey)).toString();
+}
+
+bool ProjectController::openLastSave()
+{
+    const QString path = lastSavedPath();
+    if (path.isEmpty() || !QFileInfo::exists(path))
+        return false;
+    return open(path);
+}
+
 bool ProjectController::isModified() const
 {
     return project_ && !project_->undoStack()->isClean();
@@ -101,13 +121,8 @@ QString ProjectController::registerAsset(const QString& absolutePathOrUrl)
         }
     }
 
-    {
-        std::ofstream f("d:/ws/YetAnotherVideoEditor/app_debug.log", std::ios::app);
-        if (f.is_open()) {
-            f << "[registerAsset] resolved path: " << absolutePath.toStdString()
-              << " (from: " << absolutePathOrUrl.toStdString() << ")" << std::endl;
-        }
-    }
+    qInfo() << "[registerAsset] resolved path:" << absolutePath
+            << "(from:" << absolutePathOrUrl << ")";
 
     if (!project_)
         return {};
@@ -115,17 +130,12 @@ QString ProjectController::registerAsset(const QString& absolutePathOrUrl)
     // 1. メディアの情報をプローブする
     media::MediaInfo info = media::MediaProbe::probe(absolutePath);
 
-    {
-        std::ofstream f("d:/ws/YetAnotherVideoEditor/app_debug.log", std::ios::app);
-        if (f.is_open()) {
-            f << "[registerAsset] probe ok: " << info.ok
-              << ", hasVideo: " << info.hasVideo
-              << ", hasAudio: " << info.hasAudio
-              << ", duration: " << info.durationFrames
-              << ", audioDuration: " << info.audioDurationFrames
-              << ", error: " << info.error.toStdString() << std::endl;
-        }
-    }
+    qInfo() << "[registerAsset] probe ok:" << info.ok
+            << "hasVideo:" << info.hasVideo
+            << "hasAudio:" << info.hasAudio
+            << "duration:" << info.durationFrames
+            << "audioDuration:" << info.audioDurationFrames
+            << "error:" << info.error;
     
     // 2. アセット種別の判定
     Asset::Kind kind = Asset::Kind::Video;
@@ -155,20 +165,25 @@ QString ProjectController::registerAsset(const QString& absolutePathOrUrl)
         a->resolution = info.resolution;
         a->hasAudio = info.hasAudio;
         Rational projTimebase = project_->timebase();
+        // timebase = num/den [秒/フレーム] なので、フレーム数 = 秒 * den / num。
+        // (例: timebase=1001/60000 なら 1 秒 = 60000/1001 ≒ 59.94 フレーム)
 
         if (info.frameRateNum > 0) {
             a->frameRate = Rational{info.frameRateNum, info.frameRateDen};
             // 秒数 = frameCount * src_den / src_num
             double sec = double(info.durationFrames) * info.frameRateDen / info.frameRateNum;
-            a->durationFrames = qRound64(sec * double(projTimebase.num) / projTimebase.den);
+            a->durationFrames = qRound64(sec * double(projTimebase.den) / projTimebase.num);
         } else if (info.hasAudio && info.audioSampleRate > 0) {
             double sec = double(info.audioDurationFrames) / info.audioSampleRate;
-            a->durationFrames = qRound64(sec * double(projTimebase.num) / projTimebase.den);
+            a->durationFrames = qRound64(sec * double(projTimebase.den) / projTimebase.num);
         }
     }
 
     // 5. ライブラリの「いま開いているフォルダ」へは QML 側が入れる (1.7.5)。
     //    ここでは既定 (ルート直下) のままにしておく。
+    qInfo() << "[registerAsset] registered id:" << a->id.toString(QUuid::WithoutBraces)
+            << "kind:" << int(a->kind)
+            << "durationFrames:" << a->durationFrames;
     app::LibraryStore::instance().refreshMedia();
     return a->id.toString(QUuid::WithoutBraces);
 }

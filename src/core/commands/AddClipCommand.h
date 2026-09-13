@@ -23,6 +23,9 @@ public:
     /// デバッグ用: 実際に挿入できたか (重なりで no-op になっていないか)。
     bool wasInserted() const { return inserted_; }
 
+    /// 挿入できなかった場合の理由 (翻訳済み)。挿入できた場合は空。
+    QString rejectReason() const { return rejectReason_; }
+
 protected:
     void doRedo() override;
     void doUndo() override;
@@ -32,6 +35,7 @@ private:
     int                   trackIndex_;
     std::shared_ptr<Clip> clip_;
     bool                  inserted_ = false;
+    QString               rejectReason_;
 };
 
 /// クリップ削除。

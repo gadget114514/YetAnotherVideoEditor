@@ -6,6 +6,8 @@
 #include "../core/Track.h"
 #include "../subtitle/SubtitleClip.h"
 
+#include <QDebug>
+
 namespace yave {
 
 // ===========================================================================
@@ -120,6 +122,37 @@ QObject* TrackListModel::clipModelProvider(int row)
     return model;
 }
 
+QString TrackListModel::trackIdAt(int row) const
+{
+    const Track* t = trackAt(row);
+    return t ? t->id().toString(QUuid::WithoutBraces) : QString();
+}
+
+QString TrackListModel::trackTypeAt(int row) const
+{
+    const Track* t = trackAt(row);
+    if (!t)
+        return {};
+    switch (t->type()) {
+    case TrackType::Video:       return QStringLiteral("video");
+    case TrackType::Audio:       return QStringLiteral("audio");
+    case TrackType::Subtitle:    return QStringLiteral("subtitle");
+    case TrackType::AiGenerated: return QStringLiteral("aiGenerated");
+    }
+    return {};
+}
+
+int TrackListModel::firstTrackIndexOfType(const QString& type) const
+{
+    if (!project_ || !project_->timeline())
+        return -1;
+    for (int i = 0; i < project_->timeline()->trackCount(); ++i) {
+        if (trackTypeAt(i) == type)
+            return i;
+    }
+    return -1;
+}
+
 // ===========================================================================
 //  ClipListModel
 // ===========================================================================
@@ -138,11 +171,24 @@ void ClipListModel::setTrack(Timeline* timeline, Track* track)
     if (track_) {
         clips_ = track_->clips();
         if (timeline_) {
+            // 通常の編集コマンド (AddClipCommand など) は structureChanged しか
+            // 発行しないため、それにも反応して再読込する。
+            connect(timeline_, &Timeline::structureChanged, this, [this]() {
+                if (!track_)
+                    return;
+                beginResetModel();
+                clips_ = track_->clips();
+                endResetModel();
+                qInfo() << "[ClipListModel] structureChanged -> track" << track_->id()
+                        << "clips=" << clips_.size();
+            });
             connect(timeline_, &Timeline::clipInserted, this, [this](const QUuid& trackId, const QUuid& clipId) {
                 if (track_ && track_->id() == trackId) {
                     beginResetModel();
                     clips_ = track_->clips();
                     endResetModel();
+                    qInfo() << "[ClipListModel] clipInserted -> track" << trackId
+                            << "clips=" << clips_.size();
                 }
             });
             connect(timeline_, &Timeline::clipRemoved, this, [this](const QUuid& trackId, const QUuid& clipId) {
@@ -181,6 +227,18 @@ QVariant ClipListModel::data(const QModelIndex& index, int role) const
     case DurationRole:  return qint64(c.range().duration);
     case EndRole:       return qint64(c.range().end());
     case NameRole:      return c.name();
+    case TypeRole:      return QString::fromLatin1([](ClipType type) {
+        switch (type) {
+        case ClipType::Video:        return "video";
+        case ClipType::Audio:        return "audio";
+        case ClipType::Subtitle:     return "subtitle";
+        case ClipType::AiPlaceholder: return "aiPlaceholder";
+        case ClipType::Image:        return "image";
+        case ClipType::Color:        return "color";
+        case ClipType::Title:        return "title";
+        }
+        return "video";
+    }(c.type()));
     case EnabledRole:   return c.isEnabled();
     case LockedRole:    return c.isLocked();
     case OpacityRole:   return c.opacity();
@@ -214,6 +272,7 @@ QHash<int, QByteArray> ClipListModel::roleNames() const
         { DurationRole,        "duration" },
         { EndRole,             "end" },
         { NameRole,            "name" },
+        { TypeRole,            "type" },
         { EnabledRole,         "enabled" },
         { LockedRole,          "locked" },
         { OpacityRole,         "opacity" },

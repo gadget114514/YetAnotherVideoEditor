@@ -15,6 +15,7 @@
 #include "models/SelectionModel.h"
 #include "models/LogModel.h"
 #include "library/LibraryStore.h"
+#include "items/FileDropFilter.h"
 #include "items/ThumbnailImageProvider.h"
 #include "items/PreviewItem.h"
 #include "../core/Timeline.h"
@@ -23,6 +24,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QQuickWindow>
 #include <QFile>
 #include <QTextStream>
 #include <QQmlError>
@@ -39,13 +41,16 @@ void write_log(const std::string& msg) {
 
 int main(int argc, char** argv)
 {
-    // アプリ内ログウィンドウ (Inspector とタブ切替) を最初に有効化する。
-    // これ以降の qDebug/qInfo/qWarning はすべてそこに出る。
-    yave::app::LogModel::installQtMessageHandler();
-    write_log("main started");
     // QWidget 系 (PluginWindow) を使うので QApplication を使う。
     // QGuiApplication では QWidget が動かない。
     QApplication app(argc, argv);
+
+    // アプリ内ログウィンドウ (Inspector とタブ切替) を有効化する。
+    // ★ QApplication 生成後に呼ぶ: 先に LogModel を作ると QObject のスレッド
+    //   所属が null になり、キュー投入が永遠に実行されなくなる。
+    yave::app::LogModel::installQtMessageHandler();
+    write_log("main started");
+
     QCoreApplication::setOrganizationName(QStringLiteral("YAVE"));
     QCoreApplication::setApplicationName(QStringLiteral("YetAnotherVideoEditor"));
     QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0"));
@@ -139,6 +144,16 @@ int main(int argc, char** argv)
     engine.rootContext()->setContextProperty(QStringLiteral("logModel"),
                                              &yave::app::LogModel::instance());
 
+    // 外部ファイルドロップの URL を QML へ供給するフィルタ。
+    // QML の DropArea は外部ドロップの urls / text/uri-list を空で渡すことがある
+    // (Qt の既知挙動) ため、FileDropFilter がウィンドウレベルのネイティブ
+    // QDropEvent から URL と座標を取り出し、QML 側の fileDropFilter.lastUrls /
+    // lastPos として読めるようにする。イベントフィルタの取り付けは QML の
+    // ロード後にウィンドウができてから行う。
+    auto* fileDropFilter = new yave::app::FileDropFilter(&engine);
+    engine.rootContext()->setContextProperty(QStringLiteral("fileDropFilter"),
+                                             fileDropFilter);
+
     const QUrl url(QStringLiteral("qrc:/qt/qml/Yave/qml/MainWindow.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
                      [] {
@@ -158,6 +173,11 @@ int main(int argc, char** argv)
     auto* preview = rootObj->findChild<yave::PreviewItem*>(QStringLiteral("preview"));
     if (preview) {
         preview->attachTimeline(projectController.project()->timeline());
+    }
+
+    // QML ロード後にできたウィンドウへ FileDropFilter を取り付ける。
+    if (auto* quickWindow = qobject_cast<QQuickWindow*>(rootObj)) {
+        quickWindow->installEventFilter(fileDropFilter);
     }
 
 

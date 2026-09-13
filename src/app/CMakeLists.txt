@@ -30,6 +30,8 @@ qt_add_executable(yave_app
     items/PreviewItem.cpp
     items/ThumbnailImageProvider.h
     items/ThumbnailImageProvider.cpp
+    items/FileDropFilter.h
+    items/FileDropFilter.cpp
 )
 
 qt_add_qml_module(yave_app

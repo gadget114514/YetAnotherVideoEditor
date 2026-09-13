@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QUuid>
 #include <QVariantMap>
+#include <QHash>
 
 namespace yave {
 
@@ -63,6 +64,16 @@ public:
     /// ドラッグ中のハイライト判定に使う。実際の編集は行わない。
     Q_INVOKABLE bool canDropOnClip(const QString& category) const;
     Q_INVOKABLE bool canDropOnTrack(const QString& category, const QUuid& trackId) const;
+
+    /// メディアアセット (video / audio / image) をそのトラックへ落としてよいか。
+    /// ドラッグ中のハイライト表示に使う。
+    Q_INVOKABLE bool canDropAssetOnTrack(const QString& assetKind, const QUuid& trackId) const;
+
+    /// アセットの種別名 ("video" / "audio" / "image")。無ければ空。
+    Q_INVOKABLE QString assetKind(const QString& assetId) const;
+
+    /// クリップをそのトラックへ移動してよいか (型互換)。D&D のハイライト用。
+    Q_INVOKABLE bool canDropClipOnTrack(const QString& clipId, const QUuid& trackId) const;
 
     /// frame の近くにクリップ境界があればそのフレームを返す。無ければ -1。
     Q_INVOKABLE qint64 clipBoundaryNear(const QUuid& trackId, qint64 frame,
@@ -127,6 +138,10 @@ signals:
 private:
     Project* project_ = nullptr;
     QString  lastDropError_;
+
+    /// 取り込み済み SRT の正規化パス → 配置先トラック index。
+    /// 同一ファイルの重複取り込みを防ぎ、異なる SRT は別トラックへ展開する。
+    QHash<QString, int> importedSrtTracks_;
 };
 
 } // namespace yave

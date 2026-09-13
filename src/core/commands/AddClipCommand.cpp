@@ -4,6 +4,7 @@
 #include "../Timeline.h"
 #include "../Track.h"
 
+#include <QObject>
 #include <QtGlobal>
 
 namespace yave {
@@ -36,11 +37,33 @@ AddClipCommand::AddClipCommand(Project* project, const QUuid& trackId, int track
 
 void AddClipCommand::doRedo()
 {
+    rejectReason_.clear();
+
     Track* t = resolveTrack(project(), trackId_, trackIndex_);
-    if (!t || !clip_)
+    if (!t || !clip_) {
+        rejectReason_ = QObject::tr("The drop target track no longer exists.");
+        qInfo() << "[AddClipCommand] redo: no track/clip (trackId:"
+                << trackId_ << "trackIndex:" << trackIndex_ << ")";
         return;
-    if (t->insertClip(clip_))
+    }
+    // 型互換チェック: 音声クリップを映像トラックへ置く等を防ぐ。
+    if (!t->acceptsClip(*clip_)) {
+        rejectReason_ = QObject::tr("This clip type cannot be placed on that track.");
+        qInfo() << "[AddClipCommand] redo: REJECTED type mismatch (clipType:"
+                << int(clip_->type()) << "trackType:" << int(t->type())
+                << "trackId:" << t->id() << ")";
+        return;
+    }
+    if (t->insertClip(clip_)) {
         inserted_ = true;
+        qInfo() << "[AddClipCommand] redo: INSERTED clip" << clip_->id()
+                << "trackId:" << t->id()
+                << "range:" << clip_->range().start << "->" << clip_->range().end();
+    } else {
+        rejectReason_ = QObject::tr("This position overlaps an existing clip.");
+        qInfo() << "[AddClipCommand] redo: INSERT FAILED (overlap?) trackId:" << t->id()
+                << "range:" << clip_->range().start << "->" << clip_->range().end();
+    }
 }
 
 void AddClipCommand::doUndo()
@@ -48,8 +71,10 @@ void AddClipCommand::doUndo()
     if (!inserted_)
         return;
     Track* t = resolveTrack(project(), trackId_, trackIndex_);
-    if (t)
+    if (t) {
         t->removeClip(clip_->id());
+        qInfo() << "[AddClipCommand] undo: removed clip" << clip_->id();
+    }
     inserted_ = false;
 }
 
@@ -107,56 +132,74 @@ MoveClipCommand::MoveClipCommand(Project* project,
 void MoveClipCommand::doRedo()
 {
     Timeline* tl = project()->timeline();
-
-    std::shared_ptr<Clip> clip = tl->findClip(clipId_);
-    if (!clip) {
-        // 初回 redo: クリップはまだ古い位置にいる
-        Track* src = tl->trackById(before_.trackId);
-        if (!src)
-            return;
-        clip = src->takeClip(clipId_);
-        if (!clip)
-            return;
-        clip->setRange(after_.range);
-
-        Track* dst = tl->trackById(after_.trackId);
-        if (!dst || !dst->acceptsClip(*clip)) {
-            src->insertClip(clip);   // 戻す
-            return;
-        }
-        dst->insertClip(clip);
+    if (!tl)
         return;
-    }
 
-    // 2 回目以降の redo (undo からの復帰): undo で戻した状態から after へ
-    // findClip は全トラックを見るので、undo 後は before 側にいる。
+    // 現在クリップが乗っているトラックを特定して取り出す
+    std::shared_ptr<Clip> clip = tl->findClip(clipId_);
+    if (!clip)
+        return;
+    Track* src = nullptr;
     for (int i = 0; i < tl->trackCount(); ++i) {
         Track* t = tl->trackAt(i);
-        if (t->clipById(clipId_))
-            t->takeClip(clipId_);
+        if (t->clipById(clipId_)) {
+            src = t;
+            break;
+        }
     }
-    clip->setRange(after_.range);
+    if (!src)
+        return;
+    clip = src->takeClip(clipId_);
+
+    // 移動先へ入れる。失敗したら元の位置へ戻し、クリップを失わない。
     Track* dst = tl->trackById(after_.trackId);
-    if (dst)
-        dst->insertClip(clip);
+    const bool dstOk = dst && dst->acceptsClip(*clip);
+
+    if (dstOk) {
+        clip->setRange(after_.range);
+        if (dst->insertClip(clip)) {
+            qInfo() << "[MoveClipCommand] redo: moved clip" << clipId_
+                    << "to track" << dst->id()
+                    << "range" << clip->range().start << "->" << clip->range().end();
+            return;
+        }
+        qInfo() << "[MoveClipCommand] redo: dst insert FAILED, restoring";
+    } else {
+        qInfo() << "[MoveClipCommand] redo: dst invalid/incompatible, restoring";
+    }
+
+    clip->setRange(before_.range);
+    src->insertClip(clip);
 }
 
 void MoveClipCommand::doUndo()
 {
     Timeline* tl = project()->timeline();
+    if (!tl)
+        return;
     auto clip = tl->findClip(clipId_);
     if (!clip)
         return;
 
+    Track* src = nullptr;
     for (int i = 0; i < tl->trackCount(); ++i) {
         Track* t = tl->trackAt(i);
-        if (t->clipById(clipId_))
-            t->takeClip(clipId_);
+        if (t->clipById(clipId_)) {
+            src = t;
+            break;
+        }
     }
+    if (!src)
+        return;
+    clip = src->takeClip(clipId_);
+
     clip->setRange(before_.range);
     Track* dst = tl->trackById(before_.trackId);
-    if (dst)
-        dst->insertClip(clip);
+    if (!dst || !dst->acceptsClip(*clip) || !dst->insertClip(clip)) {
+        // 戻せない場合は移動後の位置へ戻す (クリップを失わない)
+        clip->setRange(after_.range);
+        src->insertClip(clip);
+    }
 }
 
 bool MoveClipCommand::mergeWith(const QUndoCommand* other)

@@ -13,11 +13,21 @@ ApplicationWindow {
     visible: true
     title: qsTr("YetAnotherVideoEditor")
 
+    // メニューの「最後に保存したものを開く」の有効/無効判定用。
+    // lastSavedPath() は Q_INVOKABLE (プロパティ通知が無い) なので、
+    // 開く/保存するたびに明示的に読み直す。
+    property string lastSavedPath: projectController.lastSavedPath()
+
     menuBar: MenuBar {
         Menu {
             title: qsTr("File")
             Action { text: qsTr("New Project") }
             Action { text: qsTr("Open...") }
+            Action {
+                text: qsTr("Open Last Save")
+                enabled: root.lastSavedPath !== ""
+                onTriggered: projectController.openLastSave()
+            }
             MenuSeparator { }
             Action { text: qsTr("Save"); shortcut: "Ctrl+S" }
             Action { text: qsTr("Save As...") }
@@ -285,6 +295,13 @@ ApplicationWindow {
             if (!playing)
                 root.playheadFrame = playbackController.currentFrame()
         }
+    }
+
+    // 「最後に保存したものを開く」の有効/無効を保存/読み込みのたびに更新する
+    Connections {
+        target: projectController
+        function onProjectSaved(path) { root.lastSavedPath = path }
+        function onProjectOpened(path) { root.lastSavedPath = path }
     }
 
     // 独立したプレビューウィンドウ（浮動窓）

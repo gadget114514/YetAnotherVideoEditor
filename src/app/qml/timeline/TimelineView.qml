@@ -17,6 +17,10 @@ Rectangle {
     property string selectedClipId: ""
     property string selectedTrackId: ""
 
+    // クリップをドラッグ中の移動先トラック行 (ハイライト表示用)
+    property string dragClipId: ""
+    property int    dragTargetRow: -1
+
     property real zoomFactor: 0.2
     property int    trackHeaderWidth: 160
     property int    tickInterval: niceTick()
@@ -140,6 +144,33 @@ Rectangle {
                 color: "#aaa"
                 font.pixelSize: 10
                 width: 40
+            }
+
+            // ---- トラック追加 ----
+            // トラックが 0 本だと右クリックメニューを出す場所が無いので、
+            // ツールバーからも追加できるようにする。
+            Rectangle {
+                implicitWidth: 1
+                implicitHeight: 16
+                color: "#3a3a3a"
+            }
+            Button {
+                text: qsTr("+ Video Track")
+                implicitHeight: 20
+                font.pixelSize: 10
+                onClicked: editController.addTrack("video", -1)
+            }
+            Button {
+                text: qsTr("+ Audio Track")
+                implicitHeight: 20
+                font.pixelSize: 10
+                onClicked: editController.addTrack("audio", -1)
+            }
+            Button {
+                text: qsTr("+ Subtitle Track")
+                implicitHeight: 20
+                font.pixelSize: 10
+                onClicked: editController.addTrack("subtitle", -1)
             }
 
             Item { Layout.fillWidth: true }
@@ -323,6 +354,7 @@ Rectangle {
 
                 // ---- クリップレーン ----
                 Item {
+                    id: laneItem
                     width: root.width - container.trackHeaderWidth
                     height: parent.height
                     clip: true
@@ -335,22 +367,52 @@ Rectangle {
                         z: -1
                     }
 
+                    // クリップ移動時の移動先ハイライト (互換トラックのみ)
+                    Rectangle {
+                        anchors.fill: parent
+                        color: index === container.dragTargetRow && container.dragClipId.length > 0
+                                   ? "#2affcc55" : "transparent"
+                        z: 0
+                    }
+
                     DropArea {
                         id: laneDrop
                         anchors.fill: parent
+                        // 内部ドラッグ (ライブラリから) のみ。OS ファイルドロップは
+                        // ListView 直下の fileDropArea が受け持つ (デリゲート内では
+                        // 外部ドロップの urls が空になる Qt の既知挙動があるため)。
                         keys: ["yave/library-item", "yave/asset-id"]
 
                         // ドラッグ中の落とし先の表示 (1.7.5)。
                         // トランジションは境界へ吸着するので、近い境界を縦線で示す。
                         property real snappedBoundary: -1
+                        // このトラックへ落とせる内容かどうか (ハイライト制御)
+                        property bool dropAllowed: true
+                        // onPositionChanged のログ間引き用 (毎フレーム出すと読めない)
+                        property int lastLoggedFrame: -1
 
                         function frameAt(x) {
                             return Math.max(0, Math.round(x / container.zoomFactor))
                         }
 
+                        // 内部ドラッグでは mimeData が配送されないため drag.source を優先し、
+                        // 外部/ネイティブドラッグ用に getDataAsString をフォールバックにする。
+                        function payloadOf(ev) {
+                            if (ev.source && ev.source.payload)
+                                return ev.source.payload
+                            return ev.getDataAsString("yave/library-item")
+                        }
+
+                        function assetIdOf(ev) {
+                            if (ev.source && ev.source.assetId)
+                                return ev.source.assetId
+                            return ev.getDataAsString("yave/asset-id")
+                        }
+
                         Rectangle {
                             anchors.fill: parent
-                            color: laneDrop.containsDrag ? "#20ffffff" : "transparent"
+                            color: laneDrop.containsDrag && laneDrop.dropAllowed
+                                       ? "#20ffffff" : "transparent"
                         }
 
                         Rectangle {
@@ -361,33 +423,82 @@ Rectangle {
                             color: "#ffcc55"
                         }
 
-                        onPositionChanged: (drag) => {
-                            laneDrop.snappedBoundary =
-                                editController.clipBoundaryNear(trackRow.trackId,
-                                                                laneDrop.frameAt(drag.x), 30)
+                        onEntered: (drag) => {
+                            laneDrop.dropAllowed = true
+                            const payload = laneDrop.payloadOf(drag)
+                            console.log("[drag] ENTERED track=" + trackRow.trackId
+                                        + " trackIndex=" + trackRow.trackIndex
+                                        + " hasSource=" + (drag.source ? "yes" : "no")
+                                        + " payloadLen=" + payload.length)
+                            if (payload.length > 0) {
+                                try {
+                                    const obj = JSON.parse(payload)
+                                    if (obj.category === "media" && obj.assetId)
+                                        laneDrop.dropAllowed =
+                                            editController.canDropAssetOnTrack(
+                                                editController.assetKind(obj.assetId),
+                                                trackRow.trackId)
+                                    else if (obj.category)
+                                        laneDrop.dropAllowed =
+                                            editController.canDropOnTrack(obj.category,
+                                                                          trackRow.trackId)
+                                    console.log("[laneDrop] payload category=" + obj.category
+                                                + " assetId=" + obj.assetId
+                                                + " dropAllowed=" + laneDrop.dropAllowed)
+                                } catch (e) { /* 不正なペイロードはそのまま受ける */ }
+                            }
                         }
-                        onExited: laneDrop.snappedBoundary = -1
+
+                        onPositionChanged: (drag) => {
+                            const frame = laneDrop.frameAt(drag.x)
+                            laneDrop.snappedBoundary =
+                                editController.clipBoundaryNear(trackRow.trackId, frame, 30)
+                            // フレームが動いたときだけ出す (間引かないと数十行/秒になる)
+                            if (frame !== laneDrop.lastLoggedFrame) {
+                                laneDrop.lastLoggedFrame = frame
+                                console.log("[drag] MOVE track=" + trackRow.trackId
+                                            + " frame=" + frame
+                                            + " snap=" + laneDrop.snappedBoundary
+                                            + " allowed=" + laneDrop.dropAllowed)
+                            }
+                        }
+                        onExited: {
+                            laneDrop.snappedBoundary = -1
+                            laneDrop.lastLoggedFrame = -1
+                            console.log("[drag] EXITED track=" + trackRow.trackId)
+                        }
 
                         onDropped: (drop) => {
                             const startFrame = laneDrop.frameAt(drop.x)
                             laneDrop.snappedBoundary = -1
+                            laneDrop.lastLoggedFrame = -1
 
-                            // DragEvent には hasFormat() がないので getDataAsString の
-                            // 空判定で形式を見る (空でない文字列ならその形式を持つ)
-                            const payload = drop.getDataAsString("yave/library-item")
+                            const payload = laneDrop.payloadOf(drop)
+                            console.log("[drag] DROPPED track=" + trackRow.trackId
+                                        + " frame=" + startFrame
+                                        + " via=" + (drop.source && drop.source.payload
+                                                         ? "source" : "mime")
+                                        + " payloadLen=" + payload.length)
+
                             if (payload.length > 0) {
                                 if (editController.dropLibraryItem(payload, trackRow.trackId,
-                                                                   startFrame, ""))
+                                                                   startFrame, "")) {
                                     drop.acceptProposedAction()
+                                } else {
+                                    console.log("[drag] dropLibraryItem -> REJECTED: "
+                                                + editController.lastDropError())
+                                }
                                 return
                             }
                             // 後方互換: メディアのみの古い MIME
-                            const assetId = drop.getDataAsString("yave/asset-id")
-                            if (assetId.length === 0)
+                            const assetId = laneDrop.assetIdOf(drop)
+                            if (assetId.length > 0) {
+                                editController.addAssetClip(trackRow.trackIndex, trackRow.trackId,
+                                                            assetId, startFrame, 0)
+                                drop.acceptProposedAction()
                                 return
-                            editController.addAssetClip(trackRow.trackIndex, trackRow.trackId,
-                                                        assetId, startFrame, 180)
-                            drop.acceptProposedAction()
+                            }
+                            console.log("[drag] DROPPED but no payload/assetId -> ignored")
                         }
                     }
 
@@ -411,6 +522,7 @@ Rectangle {
                         model: clipListModelForTrack(index)
 
                         delegate: Rectangle {
+                            id: clipVisual
                             x: start * container.zoomFactor
                             y: 4
                             width: Math.max(2, duration * container.zoomFactor)
@@ -457,7 +569,10 @@ Rectangle {
                                 }
 
                                 onDropped: (drop) => {
-                                    const payload = drop.getDataAsString("yave/library-item")
+                                    // 内部ドラッグは drag.source 経由でしかデータが来ない
+                                    const payload = (drop.source && drop.source.payload)
+                                                        ? drop.source.payload
+                                                        : drop.getDataAsString("yave/library-item")
                                     if (payload.length === 0)
                                         return
                                     if (editController.dropLibraryItem(payload, trackRow.trackId,
@@ -467,16 +582,154 @@ Rectangle {
                             }
 
                             MouseArea {
+                                id: bodyMouse
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onClicked: (mouse) => {
+                                drag.target: clipVisual
+                                drag.axis: Drag.XAxis
+                                drag.threshold: 4
+
+                                property real dragStartX: 0
+
+                                onPressed: (mouse) => {
                                     if (mouse.button === Qt.RightButton) {
                                         clipMenu.clipId = model.clipId
                                         clipMenu.trackId = trackRow.trackId
                                         clipMenu.trackIndex = trackRow.trackIndex
                                         clipMenu.popup()
+                                        return
+                                    }
+                                    container.clipSelected(trackRow.trackId, model.clipId)
+                                    container.dragClipId = model.clipId
+                                    container.dragTargetRow = trackRow.trackIndex
+                                    dragStartX = clipVisual.x
+                                }
+                                onPositionChanged: (mouse) => {
+                                    // drag.target が x を動かす。0 より左へは行かない
+                                    if (clipVisual.x < 0)
+                                        clipVisual.x = 0
+                                    // 移動先トラック行を追跡 (別トラック移動用)
+                                    const p = root.mapFromItem(bodyMouse, mouse.x, mouse.y)
+                                    const row = root.indexAt(p.x, p.y + root.contentY)
+                                    if (row >= 0) {
+                                        const tid = root.model.trackIdAt(row)
+                                        if (editController.canDropClipOnTrack(model.clipId, tid))
+                                            container.dragTargetRow = row
+                                        else
+                                            container.dragTargetRow = -1
                                     } else {
+                                        container.dragTargetRow = -1
+                                    }
+                                }
+                                onReleased: {
+                                    const targetRow = container.dragTargetRow
+                                    container.dragClipId = ""
+                                    container.dragTargetRow = -1
+                                    const newStart = Math.max(0, Math.round(clipVisual.x / container.zoomFactor))
+                                    if (Math.abs(clipVisual.x - dragStartX) >= 1
+                                            || targetRow !== trackRow.trackIndex) {
+                                        const toTrackId = targetRow >= 0
+                                                              ? root.model.trackIdAt(targetRow)
+                                                              : trackRow.trackId
+                                        if (toTrackId.length > 0) {
+                                            editController.moveClip(trackRow.trackId, toTrackId,
+                                                                    model.clipId, newStart, duration)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ---- 左トリムハンドル (In を変更 = 開始位置と長さ) ----
+                            Rectangle {
+                                id: leftHandle
+                                width: 6
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                color: model.clipId === container.selectedClipId ? "#ffb54a" : "#666666"
+                                opacity: 0.8
+                                z: 2
+
+                                MouseArea {
+                                    id: leftTrim
+                                    anchors.fill: parent
+                                    cursorShape: Qt.SplitHCursor
+
+                                    property point pressLane: Qt.point(0, 0)
+                                    property int   startF: 0
+                                    property int   endF: 0
+                                    property bool  moved: false
+
+                                    onPressed: (mouse) => {
                                         container.clipSelected(trackRow.trackId, model.clipId)
+                                        pressLane = laneItem.mapFromItem(leftTrim, mouse.x, mouse.y)
+                                        startF = start
+                                        endF = start + duration
+                                        moved = false
+                                        mouse.accepted = true
+                                    }
+                                    onPositionChanged: (mouse) => {
+                                        const p = laneItem.mapFromItem(leftTrim, mouse.x, mouse.y)
+                                        const deltaF = Math.round((p.x - pressLane.x) / container.zoomFactor)
+                                        if (deltaF !== 0)
+                                            moved = true
+                                        const ns = Math.min(Math.max(0, startF + deltaF), endF - 1)
+                                        clipVisual.x = ns * container.zoomFactor
+                                        clipVisual.width = Math.max(1, (endF - ns) * container.zoomFactor)
+                                    }
+                                    onReleased: {
+                                        if (moved) {
+                                            const ns = Math.max(0, Math.round(clipVisual.x / container.zoomFactor))
+                                            editController.trimClip(trackRow.trackId, model.clipId,
+                                                                    0, ns, endF - ns)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ---- 右トリムハンドル (Out を変更 = 長さ) ----
+                            Rectangle {
+                                id: rightHandle
+                                width: 6
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                color: model.clipId === container.selectedClipId ? "#ffb54a" : "#666666"
+                                opacity: 0.8
+                                z: 2
+
+                                MouseArea {
+                                    id: rightTrim
+                                    anchors.fill: parent
+                                    cursorShape: Qt.SplitHCursor
+
+                                    property point pressLane: Qt.point(0, 0)
+                                    property int   startF: 0
+                                    property int   endF: 0
+                                    property bool  moved: false
+
+                                    onPressed: (mouse) => {
+                                        container.clipSelected(trackRow.trackId, model.clipId)
+                                        pressLane = laneItem.mapFromItem(rightTrim, mouse.x, mouse.y)
+                                        startF = start
+                                        endF = start + duration
+                                        moved = false
+                                        mouse.accepted = true
+                                    }
+                                    onPositionChanged: (mouse) => {
+                                        const p = laneItem.mapFromItem(rightTrim, mouse.x, mouse.y)
+                                        const deltaF = Math.round((p.x - pressLane.x) / container.zoomFactor)
+                                        if (deltaF !== 0)
+                                            moved = true
+                                        const ne = Math.max(startF + 1, endF + deltaF)
+                                        clipVisual.width = Math.max(1, (ne - startF) * container.zoomFactor)
+                                    }
+                                    onReleased: {
+                                        if (moved) {
+                                            const ne = startF + Math.max(1, Math.round(clipVisual.width / container.zoomFactor))
+                                            editController.trimClip(trackRow.trackId, model.clipId,
+                                                                    0, startF, ne - startF)
+                                        }
                                     }
                                 }
                             }
@@ -484,6 +737,101 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    // ---- OS ファイルドロップ ----
+    // Flickable (ListView) の内側では外部ドラッグの urls が空になる Qt の既知挙動が
+    // あるため、ルート (コンテナ直下) で受ける。内部ドラッグ (ライブラリ) は
+    // デリゲート側の laneDrop が受け持つ。
+    DropArea {
+        id: fileDropArea
+        anchors.fill: parent
+
+        // 外部ファイルドロップ (text/uri-list) だけを受ける。keys が無いと
+        // 最前面の DropArea が内部ドラッグ (ライブラリ) まで奪ってしまい、
+        // デリゲート側の laneDrop へ届かなくなる。
+        keys: ["text/uri-list"]
+
+        Rectangle {
+            anchors.fill: parent
+            color: fileDropArea.containsDrag ? "#15ffffff" : "transparent"
+            z: 100
+        }
+
+        onEntered: (drag) => {
+            console.log("[fileDrop] ENTERED hasUrls=" + drag.hasUrls
+                        + " hasText=" + drag.hasText)
+        }
+
+        onDropped: (drop) => {
+            let urls = drop.urls
+            let dropPos = Qt.point(drop.x, drop.y)
+
+            // QML の DragEvent は外部ファイルドロップの urls / text/uri-list を
+            // 空で渡すことがある (Qt の既知挙動)。その場合はウィンドウレベルで
+            // 捕捉した FileDropFilter がネイティブ QDropEvent から取り出した
+            // URL と座標 (ウィンドウ座標) をフォールバックとして使う。
+            if ((!drop.hasUrls || !urls || urls.length === 0)
+                    && fileDropFilter && fileDropFilter.lastUrls.length > 0) {
+                urls = fileDropFilter.lastUrls
+                dropPos = fileDropArea.mapFromItem(Window.window.contentItem,
+                                                   fileDropFilter.lastPos)
+            }
+
+            if (!urls || urls.length === 0) {
+                console.log("[fileDrop] no urls, ignored")
+                return
+            }
+
+            // 落下位置を ListView のコンテンツ座標へ変換してトラック行を求める
+            const p = root.mapFromItem(fileDropArea, dropPos.x, dropPos.y)
+            const row = root.indexAt(p.x, p.y + root.contentY)
+            const trackId   = row >= 0 ? root.model.trackIdAt(row) : ""
+            const trackType = row >= 0 ? root.model.trackTypeAt(row) : ""
+            const frame = Math.max(0, Math.round(
+                (p.x - container.trackHeaderWidth) / container.zoomFactor))
+            console.log("[fileDrop] DROPPED row=" + row + " track=" + trackId
+                        + " type=" + trackType + " frame=" + frame
+                        + " urls=" + urls.length)
+
+            if (row < 0 || trackId.length === 0) {
+                console.log("[fileDrop] no valid track row, ignored")
+                return
+            }
+
+            for (let i = 0; i < urls.length; ++i) {
+                const urlStr = String(urls[i])
+                const isSub = /\.srt$/i.test(urlStr) || /\.vtt$/i.test(urlStr)
+if (isSub) {
+                            // 字幕ファイルは importSrt がトラックを決定する:
+                            //   初回      -> 既存の字幕トラックへ (無ければ新規)
+                            //   同一ファイル -> 無視 (skipped)
+                            //   別のSRT   -> 新しい字幕トラックへ
+                            console.log("[fileDrop] SRT url=" + urlStr)
+                            const res = editController.importSrt(urlStr, {
+                                overlapPolicy: 1,
+                                targetTrackIndex: -1,
+                                fadeInFrames: 8,
+                                fadeOutFrames: 8
+                            })
+                            console.log("[fileDrop] importSrt ok=" + res.ok
+                                        + " skipped=" + (res.skipped === true)
+                                        + " imported=" + res.importedCount
+                                        + " trackIndex=" + res.trackIndex)
+                            if (!res.ok)
+                                console.warn("SRT import failed: " + urlStr)
+                } else {
+                    // メディアファイル: アセット登録して、落下先トラックへ置く。
+                    // duration 0 = アセットの実尺を使う。
+                    console.log("[fileDrop] media url=" + urlStr)
+                    const assetId = projectController.registerAsset(urlStr)
+                    console.log("[fileDrop] registerAsset returned: '" + assetId + "'")
+                    if (assetId)
+                        editController.addAssetClip(row, trackId, assetId, frame, 0)
+                }
+            }
+            drop.acceptProposedAction()
         }
     }
 

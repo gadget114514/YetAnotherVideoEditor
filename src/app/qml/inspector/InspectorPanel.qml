@@ -90,7 +90,6 @@ Rectangle {
             fadeOutBox.value        = info.fadeOut
             opacitySlider.value     = info.opacity
             blendCombo.currentIndex = info.blendMode
-            clipTextLabel.text      = info.text !== undefined ? info.text : ""
 
             const isAudio = info.isAudio
             gainRow.visible  = isAudio

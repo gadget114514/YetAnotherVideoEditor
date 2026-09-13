@@ -49,6 +49,14 @@ public:
     Q_INVOKABLE void moveTrack(int from, int to);
     Q_INVOKABLE QObject* clipModelProvider(int row);
 
+    /// 行番号のトラック ID (文字列)。範囲外は空。
+    Q_INVOKABLE QString trackIdAt(int row) const;
+    /// 行番号のトラック種別 ("video" / "audio" / "subtitle" / "aiGenerated")。
+    Q_INVOKABLE QString trackTypeAt(int row) const;
+
+    /// 指定種別の最初のトラック行。無ければ -1。
+    Q_INVOKABLE int firstTrackIndexOfType(const QString& type) const;
+
     Track* trackAt(int row) const;
 
 private:

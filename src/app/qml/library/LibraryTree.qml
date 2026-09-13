@@ -135,7 +135,10 @@ Rectangle {
                 }
 
                 onDropped: function(drop) {
-                    var payload = drop.getDataAsString("yave/library-item")
+                    // 内部ドラッグは drag.source 経由でしかデータが来ない
+                    var payload = (drop.source && drop.source.payload)
+                                      ? drop.source.payload
+                                      : drop.getDataAsString("yave/library-item")
                     if (!payload)
                         return
                     try {

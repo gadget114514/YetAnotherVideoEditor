@@ -2,6 +2,8 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QMetaObject>
 #include <QThread>
 
@@ -38,7 +40,18 @@ QHash<int, QByteArray> LogModel::roleNames() const
 
 void LogModel::append(const QString& line)
 {
-    if (QThread::currentThread() != thread()) {
+    // QApplication 構築前に instance() が作られた場合、QObject のスレッド所属が
+    // null になる。キュー投入が永遠に実行されないのを防ぐため、可能なら
+    // メインスレッドへ所属させてから通常のスレッド判定へ乗せる。
+    QThread* owner = thread();
+    if (!owner) {
+        if (auto* app = QCoreApplication::instance()) {
+            moveToThread(app->thread());
+            owner = app->thread();
+        }
+    }
+
+    if (owner && QThread::currentThread() != owner) {
         QMetaObject::invokeMethod(this, [this, line] { append(line); }, Qt::QueuedConnection);
         return;
     }
@@ -67,6 +80,46 @@ void LogModel::clear()
     endResetModel();
 }
 
+QString LogModel::allText() const
+{
+    return lines_.join(QLatin1Char('\n'));
+}
+
+QString LogModel::lineAt(int index) const
+{
+    if (index < 0 || index >= lines_.size())
+        return {};
+    // 行頭の "HH:mm:ss.zzz  " (13 文字 + 2 空白) を除いた本文を返す
+    const QString& line = lines_.at(index);
+    const int space = line.indexOf(QStringLiteral("  "));
+    if (space > 0)
+        return line.mid(space + 2);
+    return line;
+}
+
+void LogModel::copyAllToClipboard() const
+{
+    if (auto* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
+        app->clipboard()->setText(allText());
+}
+
+void LogModel::copyLineToClipboard(int index) const
+{
+    const QString text = lineAt(index);
+    if (text.isEmpty())
+        return;
+    if (auto* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
+        app->clipboard()->setText(text);
+}
+
+void LogModel::copyToClipboard(const QString& text) const
+{
+    if (text.isEmpty())
+        return;
+    if (auto* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
+        app->clipboard()->setText(text);
+}
+
 void LogModel::installQtMessageHandler()
 {
     qInstallMessageHandler([](QtMsgType type, const QMessageLogContext& context, const QString& msg) {
@@ -82,8 +135,11 @@ void LogModel::installQtMessageHandler()
                                                     : QStringLiteral("default");
         LogModel::instance().append(QStringLiteral("[%1] %2: %3").arg(level, category, msg));
 
-        // 端末にも出す (従来の挙動を維持)
+        // 端末にも出す (従来の挙動を維持)。
+        // stderr がファイル/パイプへリダイレクトされていると完全バッファリングに
+        // なり、プロセス終了までテール出力が反映されないことがあるため明示 flush する。
         fprintf(stderr, "%s\n", qPrintable(msg));
+        fflush(stderr);
     });
 }
 

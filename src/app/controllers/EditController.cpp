@@ -26,6 +26,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFileInfo>
+#include <QDir>
+#include <QUrl>
 
 namespace yave {
 
@@ -103,6 +105,52 @@ bool EditController::canDropOnTrack(const QString& category, const QUuid& trackI
     return false;
 }
 
+QString EditController::assetKind(const QString& assetId) const
+{
+    if (!project_)
+        return {};
+    const Asset* a = project_->assets()->asset(QUuid(assetId));
+    if (!a)
+        return {};
+    switch (a->kind) {
+    case Asset::Kind::Video:     return QStringLiteral("video");
+    case Asset::Kind::Audio:     return QStringLiteral("audio");
+    case Asset::Kind::Image:     return QStringLiteral("image");
+    case Asset::Kind::Generated: return QStringLiteral("generated");
+    }
+    return {};
+}
+
+bool EditController::canDropAssetOnTrack(const QString& assetKindStr, const QUuid& trackId) const
+{
+    if (!project_)
+        return false;
+    const Track* t = project_->timeline()->trackById(trackId);
+    if (!t)
+        return false;
+
+    if (assetKindStr == QLatin1String("audio"))
+        return t->type() == TrackType::Audio || t->type() == TrackType::AiGenerated;
+    if (assetKindStr == QLatin1String("image"))
+        return t->type() == TrackType::Video || t->type() == TrackType::AiGenerated;
+    // video / generated / 不明は映像トラックへ
+    return t->type() == TrackType::Video || t->type() == TrackType::AiGenerated;
+}
+
+bool EditController::canDropClipOnTrack(const QString& clipId, const QUuid& trackId) const
+{
+    if (!project_)
+        return false;
+    Timeline* tl = project_->timeline();
+    auto clip = tl ? tl->findClip(QUuid(clipId)) : nullptr;
+    if (!clip)
+        return false;
+    const Track* t = tl->trackById(trackId);
+    if (!t)
+        return false;
+    return t->acceptsClip(*clip);
+}
+
 qint64 EditController::clipBoundaryNear(const QUuid& trackId, qint64 frame,
                                         qint64 toleranceFrames) const
 {
@@ -137,7 +185,7 @@ bool EditController::dropLibraryItem(const QString& payloadJson, const QUuid& tr
     const auto fail = [this](const QString& reason) {
         lastDropError_ = reason;
         emit dropRejected(reason);
-        qInfo() << "[dropLibraryItem] REJECTED:" << reason;
+        qWarning() << "[dropLibraryItem] REJECTED:" << reason;
         return false;
     };
 
@@ -257,17 +305,17 @@ bool EditController::addClip(int trackIndex, const QUuid& trackId,
 bool EditController::addAssetClip(int trackIndex, const QUuid& trackId, const QString& assetIdStr,
                                   qint64 startFrame, qint64 durationFrames)
 {
+    lastDropError_.clear();
+
     if (!project_)
         return false;
 
     const QUuid assetId(assetIdStr);
     const Asset* asset = project_->assets()->asset(assetId);
 
-    Track* dstTrack = project_->timeline()->trackById(trackId);
-    qInfo() << "[addAssetClip] assetId:" << assetIdStr << "assetFound:" << (asset != nullptr)
-            << "assetKind:" << (asset ? int(asset->kind) : -1)
-            << "trackType:" << (dstTrack ? int(dstTrack->type()) : -1)
-            << "startFrame:" << startFrame << "durationFrames:" << durationFrames;
+    // durationFrames <= 0 のときはアセットの実尺を使う (D&D 直後の配置)
+    if (asset && durationFrames <= 0)
+        durationFrames = asset->durationFrames > 0 ? asset->durationFrames : 180;
 
     std::shared_ptr<Clip> clip;
     if (asset && asset->kind == Asset::Kind::Audio) {
@@ -288,9 +336,38 @@ bool EditController::addAssetClip(int trackIndex, const QUuid& trackId, const QS
         clip = std::move(videoClip);
     }
 
-    auto* cmd = new AddClipCommand(project_, trackId, trackIndex, clip);
+    // 落下先トラックがクリップ種別を受け付けない場合 (音声→映像トラックなど) は、
+    // 種別に合うトラックを探してそこへ置く。無ければ新規作成する。
+    Timeline* tl = project_->timeline();
+    Track* dstTrack = trackId.isNull() ? nullptr : tl->trackById(trackId);
+    if (!dstTrack || !dstTrack->acceptsClip(*clip)) {
+        dstTrack = nullptr;
+        const TrackType needed = clip->type() == ClipType::Audio ? TrackType::Audio
+                                                                 : TrackType::Video;
+        for (int i = 0; i < tl->trackCount(); ++i) {
+            Track* t = tl->trackAt(i);
+            if (t->acceptsClip(*clip)) {
+                dstTrack = t;
+                break;
+            }
+        }
+        if (!dstTrack)
+            dstTrack = tl->appendTrack(needed);
+    }
+
+    qInfo() << "[addAssetClip] assetId:" << assetIdStr << "assetFound:" << (asset != nullptr)
+            << "assetKind:" << (asset ? int(asset->kind) : -1)
+            << "dstTrackType:" << (dstTrack ? int(dstTrack->type()) : -1)
+            << "startFrame:" << startFrame << "durationFrames:" << durationFrames;
+
+    auto* cmd = new AddClipCommand(project_, dstTrack->id(), tl->indexOfTrack(dstTrack), clip);
     project_->undoStack()->push(cmd);
     qInfo() << "[addAssetClip] inserted:" << cmd->wasInserted();
+    if (!cmd->wasInserted()) {
+        lastDropError_ = cmd->rejectReason();
+        emit dropRejected(lastDropError_);
+        return false;
+    }
     return true;
 }
 
@@ -509,7 +586,7 @@ void EditController::setSubtitleStyle(const QString& clipId, const QString& prop
 //  字幕 SRT 取り込み
 // ===========================================================================
 
-QVariantMap EditController::importSrt(const QString& path, const QVariantMap& options)
+QVariantMap EditController::importSrt(const QString& pathOrUrl, const QVariantMap& options)
 {
     QVariantMap result;
     result[QStringLiteral("ok")]            = false;
@@ -517,14 +594,36 @@ QVariantMap EditController::importSrt(const QString& path, const QVariantMap& op
     result[QStringLiteral("trackId")]       = QString();
     result[QStringLiteral("trackIndex")]    = -1;
     result[QStringLiteral("warnings")]      = QStringList();
+    result[QStringLiteral("skipped")]       = false;
+
+    // file:// URL はローカルパスへ変換する (D&D から直接呼ばれるため)
+    QString path = pathOrUrl;
+    if (pathOrUrl.contains(QLatin1String("://"))) {
+        const QUrl url(pathOrUrl);
+        if (url.isLocalFile())
+            path = url.toLocalFile();
+    }
+
+    qInfo() << "[importSrt] path:" << path;
 
     if (!project_)
         return result;
+
+    // ---- 同一ファイルは無視 (2 回目以降) ----
+    const QString normPath = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (importedSrtTracks_.contains(normPath)) {
+        result[QStringLiteral("ok")]      = true;
+        result[QStringLiteral("skipped")] = true;
+        qInfo() << "[importSrt] SKIPPED (already imported):" << normPath
+                << "trackIndex=" << importedSrtTracks_.value(normPath);
+        return result;
+    }
 
     const subtitle::SrtParseResult parsed = subtitle::SrtParser::parseFile(path);
     QStringList warnings = parsed.warnings;
     if (!parsed.ok) {
         result[QStringLiteral("warnings")] = warnings;
+        qWarning() << "[importSrt] parse FAILED:" << warnings.join(';');
         return result;
     }
 
@@ -535,7 +634,29 @@ QVariantMap EditController::importSrt(const QString& path, const QVariantMap& op
     else if (overlapPolicyInt == 2)
         policy = OverlapPolicy::SkipOverlapping;
 
-    const int targetTrackIndex = options.value(QStringLiteral("targetTrackIndex"), -1).toInt();
+    // ---- 配置先トラックの決定 ----
+    // 初回: 既存の字幕トラック (最初に見つけたもの) を再利用。
+    // 2 回目以降の異なる SRT: 必ず新しい字幕トラックを作る。
+    int targetTrackIndex = -1;
+    if (importedSrtTracks_.isEmpty()) {
+        const int explicitTarget = options.value(QStringLiteral("targetTrackIndex"), -1).toInt();
+        if (explicitTarget >= 0) {
+            const Track* t = project_->timeline()->trackAt(explicitTarget);
+            if (t && t->type() == TrackType::Subtitle)
+                targetTrackIndex = explicitTarget;
+        }
+        if (targetTrackIndex < 0) {
+            for (int i = 0; i < project_->timeline()->trackCount(); ++i) {
+                if (project_->timeline()->trackAt(i)->type() == TrackType::Subtitle) {
+                    targetTrackIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+    qInfo() << "[importSrt] targetTrackIndex=" << targetTrackIndex
+            << " (firstImport=" << importedSrtTracks_.isEmpty() << ")";
+
     const QString stylePresetId =
         options.value(QStringLiteral("stylePresetId"), QStringLiteral("default")).toString();
     const qint64 fadeInFrames  = options.value(QStringLiteral("fadeInFrames"), 0).toLongLong();
@@ -564,8 +685,12 @@ QVariantMap EditController::importSrt(const QString& path, const QVariantMap& op
     if (baseIdx >= 0) {
         if (Track* t = project_->timeline()->trackAt(baseIdx))
             result[QStringLiteral("trackId")] = t->id().toString(QUuid::WithoutBraces);
+        importedSrtTracks_[normPath] = baseIdx;
     }
     result[QStringLiteral("warnings")] = warnings;
+    qInfo() << "[importSrt] OK imported=" << cmd->insertedCount()
+            << "trackIndex=" << baseIdx
+            << "warnings=" << warnings.join(';');
     return result;
 }
 

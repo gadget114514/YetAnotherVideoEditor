@@ -130,6 +130,17 @@ Item {
 
         property bool dragActive: drag.active
 
+        onDragActiveChanged: {
+            if (dragActive) {
+                console.log("[drag] START item=\"" + root.itemName + "\""
+                            + " assetId=" + root.itemAssetId
+                            + " payloadLen=" + root.itemPayload.length
+                            + " keys=" + JSON.stringify(dragProxy.Drag.keys))
+            } else {
+                console.log("[drag] END item=\"" + root.itemName + "\"")
+            }
+        }
+
         onPressed: function(mouse) {
             if (mouse.button === Qt.RightButton) {
                 root.contextMenuRequested()
@@ -139,7 +150,12 @@ Item {
             dragProxy.x = 0
             dragProxy.y = 0
         }
-        onReleased: dragProxy.Drag.drop()
+        onReleased: {
+            const result = dragProxy.Drag.drop()
+            // IgnoreAction = どの DropArea も受け取らなかった。不具合の切り分けに効く。
+            console.log("[drag] DROP result="
+                        + (result === Qt.IgnoreAction ? "IgnoreAction" : result))
+        }
         onDoubleClicked: root.doubleClicked()
     }
 
@@ -149,8 +165,20 @@ Item {
         height: 26
         visible: dragArea.dragActive
 
+        // 内部ドラッグ (Drag.Internal) では Drag.mimeData は配送されず、
+        // 受け手が参照できるのは Drag.keys と drag.source だけ。
+        // ペイロードはこのプロパティ経由で渡す。
+        property string payload: root.itemPayload
+        property string assetId: root.itemAssetId
+        property string itemName: root.itemName
+
         Drag.active: dragArea.dragActive
-        Drag.dragType: Drag.Automatic
+        // Drag.Automatic はウィンドウ内(同一シーン)のドラッグでもネイティブ OS
+        // ドラッグ (QDrag) を起動してしまい、Windows では自己ウィンドウへの
+        // ネイティブドロップが正しく認識されず、カーソルが禁止マークのまま
+        // laneDrop の onEntered / onDropped が一切発火しない不具合があった。
+        // ドロップ先 (タイムライン) は常に同じウィンドウ内なので Internal で十分。
+        Drag.dragType: Drag.Internal
         Drag.supportedActions: Qt.CopyAction
         // DropArea 側の keys フィルタを通すため必須。無いと onDropped が来ない。
         Drag.keys: root.itemAssetId !== "" ? ["yave/library-item", "yave/asset-id"]

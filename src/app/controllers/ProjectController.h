@@ -34,6 +34,12 @@ public:
     /// 自動保存の復元。前回異常終了時に .autosave が残っていた場合に呼ぶ。
     Q_INVOKABLE bool restoreAutosave();
 
+    /// 直近に開く/保存したプロジェクトのパス (QSettings に永続化)。無ければ空。
+    Q_INVOKABLE QString lastSavedPath() const;
+
+    /// lastSavedPath() を開く。パスが無い/ファイルが無い場合は false。
+    Q_INVOKABLE bool openLastSave();
+
     Q_INVOKABLE QString projectPath() const { return projectPath_; }
     Q_INVOKABLE bool isModified() const;
 

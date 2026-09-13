@@ -23,6 +23,21 @@ public:
     Q_INVOKABLE void append(const QString& line);
     Q_INVOKABLE void clear();
 
+    /// 全ログを改行区切りで返す (コピー用)。
+    Q_INVOKABLE QString allText() const;
+
+    /// 指定行の本文 (スタンプなし) を返す。範囲外は空。
+    Q_INVOKABLE QString lineAt(int index) const;
+
+    /// 全ログをクリップボードへコピーする。
+    Q_INVOKABLE void copyAllToClipboard() const;
+
+    /// クリップボードへコピーする (QML から呼ぶ)。
+    Q_INVOKABLE void copyLineToClipboard(int index) const;
+
+    /// 任意のテキストをクリップボードへコピーする (選択範囲など)。
+    Q_INVOKABLE void copyToClipboard(const QString& text) const;
+
     /// qInstallMessageHandler をこのモデルへ接続する (main() から一度呼ぶ)。
     static void installQtMessageHandler();
 

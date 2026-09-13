@@ -42,6 +42,11 @@ public:
 
     TrackType type() const { return type_; }
 
+    /// このトラックは重なったクリップを許容するか。
+    /// 字幕トラックは既定で true (複数の字幕を同時表示できるようにするため)。
+    bool allowOverlaps() const { return allowOverlaps_; }
+    void setAllowOverlaps(bool b) { allowOverlaps_ = b; }
+
     QString   name() const { return name_; }
     void      setName(const QString& n) { name_ = n; }
 
@@ -168,6 +173,7 @@ private:
 
     QUuid      id_;
     TrackType  type_;
+    bool       allowOverlaps_ = false;
     QString    name_;
     QColor     color_{0x3a, 0x5f, 0x8a};
     int        uiHeight_ = 64;
