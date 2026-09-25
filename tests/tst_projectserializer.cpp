@@ -1,11 +1,15 @@
+#include "../src/core/AssetLibrary.h"
 #include "../src/core/AudioClip.h"
 #include "../src/core/Project.h"
 #include "../src/core/Timeline.h"
 #include "../src/core/Track.h"
 #include "../src/core/VideoClip.h"
+#include "../src/core/commands/AddClipCommand.h"
+#include "../src/core/commands/ImportSubtitleCommand.h"
 #include "../src/io/ProjectSerializer.h"
 #include "../src/subtitle/SubtitleClip.h"
 #include "../src/subtitle/SubtitleText.h"
+#include "../src/subtitle/io/SrtParser.h"
 
 #include <QFile>
 #include <QJsonDocument>
@@ -32,6 +36,8 @@ private slots:
     void enumStringsInJson();
     void schemaVersionWarning();
     void autosaveCompact();
+    void dndAudioAssetRoundTrip();
+    void dndSrtImportRoundTrip();
 
 private:
     Project* makeSampleProject() const;
@@ -302,6 +308,128 @@ void TestProjectSerializer::autosaveCompact()
     Project loaded;
     const auto result = io::ProjectSerializer::loadAutosave(&loaded, path);
     QVERIFY(result.ok);
+
+    QFile::remove(path);
+}
+
+void TestProjectSerializer::dndAudioAssetRoundTrip()
+{
+    // D&D で素材を登録 (AssetLibrary::registerAsset は絶対パスを保持する) し、
+    // その assetId を参照する AudioClip をトラックへ置いた状態を保存 -> ロードする。
+    Project src;
+    Timeline* tl = src.timeline();
+
+    // 実在する一時ファイルを用意する (パス解決テストのため)
+    const QString mediaPath = tempPath(QStringLiteral(".wav"));
+    {
+        QFile f(mediaPath);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QByteArray("RIFF"));
+        f.close();
+    }
+
+    Asset* asset = src.assets()->registerAsset(mediaPath, Asset::Kind::Audio);
+    QVERIFY(asset);
+    QVERIFY(!asset->id.isNull());
+    QCOMPARE(asset->relativePath, mediaPath);   // registerAsset は絶対パスを保持
+
+    Track* audio = tl->appendTrack(TrackType::Audio, QStringLiteral("A1"));
+    auto ac = std::make_shared<AudioClip>(asset->id);
+    ac->setRange({0, 1200});
+    ac->setGain(1.0);
+    QVERIFY(audio->insertClip(ac));
+
+    const QString path = tempPath(QStringLiteral(".yave"));
+    io::SaveOptions opts;
+    QString err;
+    QVERIFY2(io::ProjectSerializer::save(src, path, opts, &err), qUtf8Printable(err));
+
+    Project loaded;
+    const io::LoadResult result = io::ProjectSerializer::load(&loaded, path);
+    QVERIFY2(result.ok, qUtf8Printable(result.errorMessage));
+    QVERIFY(result.missingAssetPaths.isEmpty());   // 絶対パスは解決されるべき
+
+    // アセットが復元され、missing フラグが立っていないこと
+    const AssetLibrary* lib = loaded.assets();
+    QCOMPARE(lib->count(), 1);
+    const Asset* la = lib->asset(asset->id);
+    QVERIFY(la);
+    QVERIFY(!la->isMissing);
+    QCOMPARE(la->resolvedAbsolutePath, mediaPath);
+
+    // AudioClip が assetId を参照していること
+    Track* laudio = loaded.timeline()->tracksOfType(TrackType::Audio).at(0);
+    QVERIFY(laudio);
+    QCOMPARE(laudio->clipCount(), 1);
+    const auto lclip = std::static_pointer_cast<AudioClip>(laudio->clips().at(0));
+    QCOMPARE(lclip->assetId(), asset->id);
+    QCOMPARE(lclip->gain(), 1.0);
+
+    QFile::remove(path);
+    QFile::remove(mediaPath);
+}
+
+void TestProjectSerializer::dndSrtImportRoundTrip()
+{
+    // タイムラインの SRT D&D 相当: SrtParser -> convertCuesToClips -> ImportSubtitleCommand
+    // で字幕トラック + 字幕クリップを作り、保存 -> ロードで復元できることを確認する。
+    Project src;
+    const QString srt = QStringLiteral(
+        "1\n00:00:01,000 --> 00:00:02,000\n一つ目\n\n"
+        "2\n00:00:02,500 --> 00:00:03,500\n二つ目\n\n"
+        "3\n00:00:04,000 --> 00:00:05,000\n三つ目\n\n");
+
+    const auto parsed = subtitle::SrtParser::parseText(srt);
+    QVERIFY(parsed.ok);
+    QStringList warnings;
+    auto clips = subtitle::convertCuesToClips(parsed, src.timeline()->timebase(),
+                                              QStringLiteral("default"), &warnings);
+    QCOMPARE(int(clips.size()), 3);
+
+    std::vector<std::shared_ptr<Clip>> genericClips;
+    genericClips.reserve(clips.size());
+    for (auto& c : clips)
+        genericClips.push_back(std::move(c));
+
+    src.undoStack()->push(new ImportSubtitleCommand(&src, std::move(genericClips),
+                                                    OverlapPolicy::SplitToNewTracks,
+                                                    -1, TrackType::Subtitle,
+                                                    QStringLiteral("test.srt")));
+
+    const std::vector<Track*> subs = src.timeline()->tracksOfType(TrackType::Subtitle);
+    QCOMPARE(int(subs.size()), 1);
+    QCOMPARE(subs[0]->clipCount(), 3);
+
+    const QString path = tempPath(QStringLiteral(".yave"));
+    io::SaveOptions opts;
+    QString err;
+    QVERIFY2(io::ProjectSerializer::save(src, path, opts, &err), qUtf8Printable(err));
+
+    Project loaded;
+    const io::LoadResult result = io::ProjectSerializer::load(&loaded, path);
+    QVERIFY2(result.ok, qUtf8Printable(result.errorMessage));
+
+    const std::vector<Track*> lsubs = loaded.timeline()->tracksOfType(TrackType::Subtitle);
+    QCOMPARE(int(lsubs.size()), 1);
+    QCOMPARE(lsubs[0]->clipCount(), 3);
+
+    // 字幕テキストとタイムスタンプが復元されていること
+    struct Found {
+        QString text;
+        int64_t start;
+        int64_t dur;
+    };
+    QList<Found> found;
+    for (const auto& c : lsubs[0]->clips()) {
+        auto* sc = static_cast<subtitle::SubtitleClip*>(c.get());
+        found.append({sc->plainText(), c->range().start, c->range().duration});
+    }
+    QCOMPARE(found.size(), 3);
+    QCOMPARE(found[0].text, QStringLiteral("一つ目"));
+    QCOMPARE(found[1].text, QStringLiteral("二つ目"));
+    QCOMPARE(found[2].text, QStringLiteral("三つ目"));
+    QVERIFY(found[0].start > 0);              // 1 秒 -> フレーム換算
+    QVERIFY(found[0].start < found[1].start); // 時系列順に復元
 
     QFile::remove(path);
 }

@@ -23,7 +23,16 @@ Rectangle {
 
     property real zoomFactor: 0.2
     property int    trackHeaderWidth: 160
-    property int    tickInterval: niceTick()
+    readonly property int tickInterval: {
+        const minPx = 45
+        const candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600,
+                            1200, 3000, 6000, 12000, 24000]
+        for (var i = 0; i < candidates.length; ++i) {
+            if (candidates[i] * zoomFactor >= minPx)
+                return candidates[i]
+        }
+        return 24000
+    }
 
     // ユーザーがルーラをクリック / ドラッグしたとき。playheadFrame は
     // 呼び出し側 (MainWindow) が単一の書き込み元になるよう、ここでは
@@ -34,18 +43,11 @@ Rectangle {
     signal clipSelected(string trackId, string clipId)
     signal trackSelected(string trackId)
 
-    function niceTick() {
-        const minPx = 42
-        const candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600,
-                            1200, 3000, 6000, 12000, 24000]
-        for (var i = 0; i < candidates.length; ++i)
-            if (candidates[i] * zoomFactor >= minPx)
-                return candidates[i]
-        return 24000
-    }
-
     function visibleFrames() {
-        return ruler.width / zoomFactor
+        const w = (typeof ruler !== "undefined" && ruler && ruler.width > 0)
+                      ? ruler.width
+                      : (container.width - trackHeaderWidth)
+        return Math.max(1, w) / zoomFactor
     }
 
     function formatTime(frame) {
@@ -184,72 +186,102 @@ Rectangle {
         }
 
         // ---- ルーラ行 ----
-        Row {
+        RowLayout {
             id: rulerRow
             Layout.fillWidth: true
-            Layout.preferredHeight: 20
+            Layout.preferredHeight: 22
+            spacing: 0
 
             Rectangle {
-                width: trackHeaderWidth
-                height: parent.height
+                Layout.preferredWidth: container.trackHeaderWidth
+                Layout.fillHeight: true
                 color: "#1a1a1a"
-                border.color: "#1a1a1a"
+                border.color: "#282828"
                 border.width: 1
+
+                Label {
+                    anchors.centerIn: parent
+                    text: qsTr("Time")
+                    color: "#777777"
+                    font.pixelSize: 10
+                    font.bold: true
+                }
             }
 
-            Item {
+            Rectangle {
                 id: ruler
-                width: parent.width - trackHeaderWidth
-                height: parent.height
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#222222"
                 clip: true
 
+                // 下部境界線
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: "#1a1a1a"
+                }
+
+                // 副目盛り
                 Repeater {
-                    model: tickInterval > 2 ? Math.floor(Math.min(duration, visibleFrames()) / (tickInterval / 2)) : 0
+                    model: container.tickInterval > 2 ? Math.floor(container.visibleFrames() / (container.tickInterval / 2)) : 0
                     delegate: Rectangle {
-                        x: (index + 1) * (container.tickInterval / 2) * zoomFactor
-                        y: 12
+                        x: (index + 1) * (container.tickInterval / 2) * container.zoomFactor
+                        y: ruler.height - 5
                         width: 1
-                        height: 4
-                        color: "#555"
+                        height: 5
+                        color: "#444444"
                     }
                 }
 
+                // 主目盛りと時間ラベル
                 Repeater {
-                    model: Math.floor(Math.min(duration, visibleFrames()) / tickInterval) + 1
-                    delegate: Rectangle {
-                        x: index * container.tickInterval * zoomFactor
-                        y: 4
+                    model: Math.floor(container.visibleFrames() / container.tickInterval) + 1
+                    delegate: Item {
+                        x: index * container.tickInterval * container.zoomFactor
+                        y: 0
                         width: 1
-                        height: 12
-                        color: "#888"
+                        height: ruler.height
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.bottom: parent.bottom
+                            width: 1
+                            height: 10
+                            color: "#777777"
+                        }
 
                         Label {
                             anchors.left: parent.left
                             anchors.leftMargin: 3
                             anchors.top: parent.top
+                            anchors.topMargin: 2
                             text: container.tickInterval >= 120
                                       ? container.formatTime(index * container.tickInterval)
                                       : (index * container.tickInterval).toString()
-                            color: "#bbb"
-                            font.pixelSize: 8
+                            color: "#bbbbbb"
+                            font.pixelSize: 9
                         }
                     }
                 }
 
                 Rectangle {
-                    x: playheadFrame * zoomFactor - 5
+                    x: container.playheadFrame * container.zoomFactor - 5
                     y: 0
-                    width: 10
-                    height: 8
+                    width: 11
+                    height: 10
                     color: "#ff5c5c"
                     radius: 1
+                    z: 10
                 }
 
                 MouseArea {
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton
-                    onClicked: seekToFrame(mouse.x / zoomFactor)
-                    onPositionChanged: if (pressed) seekToFrame(mouse.x / zoomFactor)
+                    onClicked: container.seekToFrame(mouse.x / container.zoomFactor)
+                    onPositionChanged: if (pressed) container.seekToFrame(mouse.x / container.zoomFactor)
                 }
             }
         }
@@ -365,6 +397,18 @@ Rectangle {
                         border.color: "#1a1a1a"
                         border.width: 1
                         z: -1
+                    }
+
+                    // タイムスケールと連動したグリッド線
+                    Repeater {
+                        model: Math.floor(container.visibleFrames() / container.tickInterval) + 1
+                        delegate: Rectangle {
+                            x: index * container.tickInterval * container.zoomFactor
+                            width: 1
+                            height: parent.height
+                            color: "#2c2c2c"
+                            z: -1
+                        }
                     }
 
                     // クリップ移動時の移動先ハイライト (互換トラックのみ)
@@ -485,7 +529,7 @@ Rectangle {
                                                                    startFrame, "")) {
                                     drop.acceptProposedAction()
                                 } else {
-                                    console.log("[drag] dropLibraryItem -> REJECTED: "
+                                    console.warn("[drag] dropLibraryItem -> REJECTED: "
                                                 + editController.lastDropError())
                                 }
                                 return
@@ -535,16 +579,33 @@ Rectangle {
                                               : (missingEffects ? "#cc4444" : Qt.lighter(color, 1.2))
                             border.width: model.clipId === container.selectedClipId ? 2 : 1
 
-                            Text {
-                                anchors.left: parent.left
+                            RowLayout {
+                                anchors.fill: parent
                                 anchors.leftMargin: 6
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: textPreview || model.name
-                                color: "white"
-                                elide: Text.ElideRight
-                                width: parent.width - 12
-                                font.pixelSize: 10
+                                anchors.rightMargin: 6
+                                spacing: 4
+
+                                Text {
+                                    text: textPreview || model.name
+                                    color: "white"
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                    font.pixelSize: 10
+                                }
+
+                                Text {
+                                    text: container.formatTime(duration)
+                                    color: "#b0ffffff"
+                                    font.pixelSize: 9
+                                    visible: clipVisual.width > 70
+                                }
                             }
+
+                            ToolTip.visible: bodyMouse.containsMouse && !bodyMouse.drag.active
+                            ToolTip.delay: 400
+                            ToolTip.text: (textPreview || model.name) + "\n"
+                                        + qsTr("Start: ") + container.formatTime(start) + " (" + start + "f)\n"
+                                        + qsTr("Duration: ") + container.formatTime(duration) + " (" + duration + "f)"
 
                             Rectangle {
                                 visible: generatedByAi && progress > 0 && progress < 1
@@ -573,11 +634,21 @@ Rectangle {
                                     const payload = (drop.source && drop.source.payload)
                                                         ? drop.source.payload
                                                         : drop.getDataAsString("yave/library-item")
-                                    if (payload.length === 0)
+                                    console.log("[clipDrop] DROPPED clip=" + model.clipId
+                                                + " via=" + (drop.source && drop.source.payload
+                                                                 ? "source" : "mime")
+                                                + " payloadLen=" + payload.length)
+                                    if (payload.length === 0) {
+                                        console.warn("[clipDrop] DROPPED with empty payload -> ignored")
                                         return
+                                    }
                                     if (editController.dropLibraryItem(payload, trackRow.trackId,
-                                                                       start, model.clipId))
+                                                                       start, model.clipId)) {
                                         drop.acceptProposedAction()
+                                    } else {
+                                        console.warn("[clipDrop] dropLibraryItem -> REJECTED: "
+                                                     + editController.lastDropError())
+                                    }
                                 }
                             }
 
@@ -585,6 +656,7 @@ Rectangle {
                                 id: bodyMouse
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                hoverEnabled: true
                                 drag.target: clipVisual
                                 drag.axis: Drag.XAxis
                                 drag.threshold: 4
@@ -780,7 +852,7 @@ Rectangle {
             }
 
             if (!urls || urls.length === 0) {
-                console.log("[fileDrop] no urls, ignored")
+                console.warn("[fileDrop] no urls, ignored")
                 return
             }
 
@@ -796,7 +868,7 @@ Rectangle {
                         + " urls=" + urls.length)
 
             if (row < 0 || trackId.length === 0) {
-                console.log("[fileDrop] no valid track row, ignored")
+                console.warn("[fileDrop] no valid track row, ignored")
                 return
             }
 
@@ -820,15 +892,18 @@ if (isSub) {
                                         + " imported=" + res.importedCount
                                         + " trackIndex=" + res.trackIndex)
                             if (!res.ok)
-                                console.warn("SRT import failed: " + urlStr)
+                                console.warn("[fileDrop] SRT import failed: " + urlStr)
                 } else {
                     // メディアファイル: アセット登録して、落下先トラックへ置く。
                     // duration 0 = アセットの実尺を使う。
                     console.log("[fileDrop] media url=" + urlStr)
                     const assetId = projectController.registerAsset(urlStr)
-                    console.log("[fileDrop] registerAsset returned: '" + assetId + "'")
-                    if (assetId)
+                    if (assetId) {
+                        console.log("[fileDrop] registerAsset returned: '" + assetId + "'")
                         editController.addAssetClip(row, trackId, assetId, frame, 0)
+                    } else {
+                        console.warn("[fileDrop] registerAsset FAILED for: " + urlStr)
+                    }
                 }
             }
             drop.acceptProposedAction()

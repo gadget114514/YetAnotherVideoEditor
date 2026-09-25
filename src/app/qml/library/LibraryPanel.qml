@@ -137,7 +137,7 @@ Rectangle {
                 urls = fileDropFilter.lastUrls
             console.log("[libraryFileDrop] DROPPED urls=" + (urls ? urls.length : 0))
             if (!urls || urls.length === 0) {
-                console.log("[libraryFileDrop] no urls, ignored")
+                console.warn("[libraryFileDrop] no urls, ignored")
                 return
             }
 
@@ -155,11 +155,15 @@ Rectangle {
                     continue
                 }
                 const assetId = projectController.registerAsset(urlStr)
-                console.log("[libraryFileDrop] registerAsset url=" + urlStr
-                            + " -> assetId='" + assetId + "'")
-                // 取り込んだ素材は、いま開いているフォルダへ入れる
-                if (assetId && tree.selectedCategory === 0)
-                    projectController.assignAssetToFolder(assetId, tree.selectedFolderId)
+                if (assetId) {
+                    console.log("[libraryFileDrop] registerAsset url=" + urlStr
+                                + " -> assetId='" + assetId + "'")
+                    // 取り込んだ素材は、いま開いているフォルダへ入れる
+                    if (tree.selectedCategory === 0)
+                        projectController.assignAssetToFolder(assetId, tree.selectedFolderId)
+                } else {
+                    console.warn("[libraryFileDrop] registerAsset FAILED for: " + urlStr)
+                }
             }
             drop.acceptProposedAction()
         }

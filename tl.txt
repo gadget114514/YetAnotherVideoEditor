@@ -1,0 +1,16 @@
+********* Start testing of TestTimeline *********
+Config: Using QtTest library 6.11.2, Qt 6.11.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 13.1.0), windows 11
+PASS   : TestTimeline::initTestCase()
+PASS   : TestTimeline::trackInsertRemove()
+PASS   : TestTimeline::clipOverlapRejection()
+PASS   : TestTimeline::clipAtBinarySearch()
+PASS   : TestTimeline::clipsIn()
+PASS   : TestTimeline::moveTrackZOrder()
+PASS   : TestTimeline::snapshotBuilding()
+QINFO  : TestTimeline::splitCommandUndoRedo() [AddClipCommand] redo: INSERTED clip QUuid("{a948a582-1356-476c-824f-260a751c7be3}") trackId: QUuid("{f17f05df-3ae1-4e79-8a94-87f54d7521f3}") range: 0 -> 1000
+PASS   : TestTimeline::splitCommandUndoRedo()
+PASS   : TestTimeline::rippleDelete()
+PASS   : TestTimeline::undoStackIntegration()
+PASS   : TestTimeline::cleanupTestCase()
+Totals: 11 passed, 0 failed, 0 skipped, 0 blacklisted, 2ms
+********* Finished testing of TestTimeline *********

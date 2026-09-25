@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "timeline"
 import "library"
 import Yave
@@ -21,16 +22,34 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: qsTr("File")
-            Action { text: qsTr("New Project") }
-            Action { text: qsTr("Open...") }
+            Action {
+                text: qsTr("New Project")
+                onTriggered: projectController.newProject()
+            }
+            Action {
+                text: qsTr("Open...")
+                onTriggered: openProjectDialog.open()
+            }
             Action {
                 text: qsTr("Open Last Save")
                 enabled: root.lastSavedPath !== ""
                 onTriggered: projectController.openLastSave()
             }
             MenuSeparator { }
-            Action { text: qsTr("Save"); shortcut: "Ctrl+S" }
-            Action { text: qsTr("Save As...") }
+            Action {
+                text: qsTr("Save")
+                shortcut: "Ctrl+S"
+                onTriggered: {
+                    if (projectController.projectPath() === "")
+                        saveProjectDialog.open()
+                    else
+                        projectController.save()
+                }
+            }
+            Action {
+                text: qsTr("Save As...")
+                onTriggered: saveProjectDialog.open()
+            }
         }
         Menu {
             title: qsTr("Edit")
@@ -302,6 +321,22 @@ ApplicationWindow {
         target: projectController
         function onProjectSaved(path) { root.lastSavedPath = path }
         function onProjectOpened(path) { root.lastSavedPath = path }
+    }
+
+    FileDialog {
+        id: openProjectDialog
+        title: qsTr("Open Project")
+        nameFilters: [qsTr("YAVE Project (*.yave)"), qsTr("All Files (*)")]
+        onAccepted: projectController.open(selectedFile)
+    }
+
+    FileDialog {
+        id: saveProjectDialog
+        title: qsTr("Save Project As")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "yave"
+        nameFilters: [qsTr("YAVE Project (*.yave)")]
+        onAccepted: projectController.saveAs(selectedFile)
     }
 
     // 独立したプレビューウィンドウ（浮動窓）

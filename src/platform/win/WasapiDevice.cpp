@@ -25,6 +25,9 @@ const IID   kIID_IAudioClient = {
     0x1CB9AD4C, 0xDBFA, 0x4C32, {0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2}};
 const IID   kIID_IAudioRenderClient = {
     0xF294ACFC, 0x3146, 0x4483, {0xA7, 0xBF, 0xAD, 0xDC, 0xA7, 0xC2, 0x60, 0xE2}};
+const GUID  kSubFormat_IEEE_FLOAT = {
+    0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71}};
+
 
 /// テンプレート不要の簡易 RAII COM リリーサ
 template <typename T>
@@ -39,7 +42,19 @@ void safeRelease(T** p)
 class WasapiDevice final : public IAudioDevice
 {
 public:
-    ~WasapiDevice() override { close(); }
+    WasapiDevice()
+    {
+        eventHandle_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    }
+
+    ~WasapiDevice() override
+    {
+        close();
+        if (eventHandle_) {
+            CloseHandle(eventHandle_);
+            eventHandle_ = nullptr;
+        }
+    }
 
     bool open(const QString& deviceId, int sampleRate, int bufferFrames,
               AudioCallback cb, void* userData, QString* errorOut) override
@@ -62,7 +77,8 @@ public:
                               reinterpret_cast<void**>(&enumerator));
         if (FAILED(hr)) {
             if (errorOut)
-                *errorOut = QStringLiteral("CoCreateInstance(MMDeviceEnumerator) failed");
+                *errorOut = QStringLiteral("CoCreateInstance(MMDeviceEnumerator) failed: 0x%1")
+                                .arg(uint(hr), 8, 16, QLatin1Char('0'));
             return false;
         }
 
@@ -72,47 +88,56 @@ public:
         else
             hr = E_NOTIMPL;   ///< 特定デバイス ID の解決は将来拡張
         safeRelease(&enumerator);
-        if (FAILED(hr)) {
+        if (FAILED(hr) || !device) {
             if (errorOut)
-                *errorOut = QStringLiteral("GetDefaultAudioEndpoint failed");
+                *errorOut = QStringLiteral("GetDefaultAudioEndpoint failed: 0x%1")
+                                .arg(uint(hr), 8, 16, QLatin1Char('0'));
             return false;
         }
 
         hr = device->Activate(kIID_IAudioClient, CLSCTX_ALL, nullptr,
                               reinterpret_cast<void**>(&audioClient_));
         safeRelease(&device);
-        if (FAILED(hr)) {
+        if (FAILED(hr) || !audioClient_) {
             if (errorOut)
-                *errorOut = QStringLiteral("IMMDevice::Activate failed");
+                *errorOut = QStringLiteral("IMMDevice::Activate failed: 0x%1")
+                                .arg(uint(hr), 8, 16, QLatin1Char('0'));
             return false;
+        }
+
+        // デバイスのネイティブミックスフォーマットを取得
+        WAVEFORMATEX* mix = nullptr;
+        hr = audioClient_->GetMixFormat(&mix);
+        if (FAILED(hr) || !mix) {
+            if (errorOut)
+                *errorOut = QStringLiteral("GetMixFormat failed: 0x%1")
+                                .arg(uint(hr), 8, 16, QLatin1Char('0'));
+            return false;
+        }
+
+        sampleRate_     = mix->nSamplesPerSec;
+        deviceChannels_ = int(mix->nChannels);
+        channelCount_   = std::min(2, deviceChannels_);
+        bytesPerFrame_  = int(mix->nBlockAlign);
+
+        // float か 16-bit 整数か
+        isFloat_ = false;
+        if (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+            isFloat_ = true;
+        } else if (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->cbSize >= 22) {
+            const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(mix);
+            if (std::memcmp(&ext->SubFormat, &kSubFormat_IEEE_FLOAT, sizeof(GUID)) == 0) {
+                isFloat_ = true;
+            }
         }
 
         // 共有モード + イベント駆動。バッファ長は要求値を尊重させる。
         REFERENCE_TIME bufferDuration =
-            REFERENCE_TIME(double(bufferFrames) / double(sampleRate) * 10000000.0);
+            REFERENCE_TIME(double(bufferFrames) / double(sampleRate_) * 10000000.0);
         hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED,
                                       AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                                      bufferDuration, 0, nullptr, nullptr);
-        if (hr == AUDCLNT_E_UNSUPPORTED_FORMAT || hr == E_INVALIDARG) {
-            // WAVEFORMATEX 未指定の Initialize は Vista 系で失敗するため、
-            // GetMixFormat ベースで再試行する。
-            WAVEFORMATEX* mix = nullptr;
-            if (SUCCEEDED(audioClient_->GetMixFormat(&mix)) && mix) {
-                sampleRate_   = mix->nSamplesPerSec;
-                channelCount_ = std::min(2, int(mix->nChannels));
-                hr = audioClient_->Initialize(
-                    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                    bufferDuration, 0, mix, nullptr);
-                CoTaskMemFree(mix);
-            }
-        } else {
-            WAVEFORMATEX* mix = nullptr;
-            if (SUCCEEDED(audioClient_->GetMixFormat(&mix)) && mix) {
-                sampleRate_   = mix->nSamplesPerSec;
-                channelCount_ = std::min(2, int(mix->nChannels));
-                CoTaskMemFree(mix);
-            }
-        }
+                                      bufferDuration, 0, mix, nullptr);
+        CoTaskMemFree(mix);
         if (FAILED(hr)) {
             if (errorOut)
                 *errorOut = QStringLiteral("IAudioClient::Initialize failed: 0x%1")
@@ -120,18 +145,24 @@ public:
             return false;
         }
 
+        if (!eventHandle_) {
+            eventHandle_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        }
+
         hr = audioClient_->SetEventHandle(eventHandle_);
         if (FAILED(hr)) {
             if (errorOut)
-                *errorOut = QStringLiteral("SetEventHandle failed");
+                *errorOut = QStringLiteral("SetEventHandle failed: 0x%1")
+                                .arg(uint(hr), 8, 16, QLatin1Char('0'));
             return false;
         }
 
         hr = audioClient_->GetService(kIID_IAudioRenderClient,
                                       reinterpret_cast<void**>(&renderClient_));
-        if (FAILED(hr)) {
+        if (FAILED(hr) || !renderClient_) {
             if (errorOut)
-                *errorOut = QStringLiteral("GetService(IAudioRenderClient) failed");
+                *errorOut = QStringLiteral("GetService(IAudioRenderClient) failed: 0x%1")
+                                .arg(uint(hr), 8, 16, QLatin1Char('0'));
             return false;
         }
 
@@ -139,13 +170,13 @@ public:
         audioClient_->GetBufferSize(&frames);
         bufferFrames_ = int(frames);
 
-        // コールバックへ渡す非インターリーブ (プラナー) スクラッチを事前確保する。
-        // RT スレッド内では確保を行わない。
-        scratchData_.resize(size_t(bufferFrames_) * size_t(channelCount_));
+        // コールバックへ渡すプラナー用スクラッチを余裕を持って確保
+        const int allocFrames = std::max(bufferFrames_ * 2, 4096);
+        scratchData_.assign(size_t(allocFrames) * size_t(channelCount_), 0.0f);
         scratchPlanar_.resize(size_t(channelCount_));
         for (int c = 0; c < channelCount_; ++c)
             scratchPlanar_[size_t(c)] =
-                scratchData_.data() + size_t(c) * size_t(bufferFrames_);
+                scratchData_.data() + size_t(c) * size_t(allocFrames);
 
         return true;
     }
@@ -155,25 +186,26 @@ public:
         stopThread();
         safeRelease(&renderClient_);
         safeRelease(&audioClient_);
-
-        if (eventHandle_) {
-            CloseHandle(eventHandle_);
-            eventHandle_ = nullptr;
-        }
     }
 
     bool start() override
     {
         if (!audioClient_ || !renderClient_)
             return false;
-        if (!eventHandle_) {
-            eventHandle_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-            audioClient_->SetEventHandle(eventHandle_);
+
+        // 初期無音バッファをプリロール (WASAPI イベント駆動の推奨作法)
+        BYTE* pData = nullptr;
+        if (bufferFrames_ > 0 && SUCCEEDED(renderClient_->GetBuffer(UINT32(bufferFrames_), &pData))) {
+            std::memset(pData, 0, size_t(bufferFrames_) * size_t(bytesPerFrame_));
+            renderClient_->ReleaseBuffer(UINT32(bufferFrames_), 0);
         }
+
         running_.store(true, std::memory_order_release);
 
-        if (FAILED(audioClient_->Start()))
+        if (FAILED(audioClient_->Start())) {
+            running_.store(false, std::memory_order_release);
             return false;
+        }
 
         thread_ = std::thread([this] { renderLoop(); });
         return true;
@@ -200,20 +232,21 @@ private:
     void stopThread()
     {
         running_.store(false, std::memory_order_release);
-        if (thread_.joinable()) {
+        if (eventHandle_)
             SetEvent(eventHandle_);
+        if (thread_.joinable())
             thread_.join();
-        }
     }
 
     void renderLoop()
     {
-        // Pro Audio スレッド昇格。失敗しても続行する。
         DWORD taskIndex = 0;
         HANDLE task = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
 
         while (running_.load(std::memory_order_acquire)) {
             DWORD wait = WaitForSingleObject(eventHandle_, 2000);
+            if (!running_.load(std::memory_order_acquire))
+                break;
             if (wait != WAIT_OBJECT_0)
                 continue;
 
@@ -228,27 +261,42 @@ private:
             if (FAILED(renderClient_->GetBuffer(available, &data)))
                 break;
 
-            const int n = std::min(int(available), int(bufferFrames_));
+            const int n = int(available);
 
             if (callback_ && n > 0) {
-                // コールバックは「チャンネル配列へのポインタ配列」(プラナー) を要求する。
-                // WASAPI 共有モードのステレオ float (インターリーブ) バッファへ
-                // 変換するために、スクラッチへ書き込んでからコピーする。
                 callback_(scratchPlanar_.data(), channelCount_, n, userData_);
 
-                if (channelCount_ >= 2) {
+                if (isFloat_) {
+                    float* dst = reinterpret_cast<float*>(data);
                     const float* l = scratchPlanar_[0];
-                    const float* r = scratchPlanar_[1];
+                    const float* r = channelCount_ > 1 ? scratchPlanar_[1] : l;
                     for (int i = 0; i < n; ++i) {
-                        data[size_t(i) * 2]       = l[i];
-                        data[size_t(i) * 2 + 1]   = r[i];
+                        const size_t base = size_t(i) * size_t(deviceChannels_);
+                        dst[base] = l[i];
+                        if (deviceChannels_ > 1) {
+                            dst[base + 1] = r[i];
+                        }
+                        for (int c = 2; c < deviceChannels_; ++c) {
+                            dst[base + size_t(c)] = 0.0f;
+                        }
                     }
                 } else {
-                    std::memset(data, 0, size_t(n) * size_t(channelCount_) * sizeof(float));
+                    int16_t* dst = reinterpret_cast<int16_t*>(data);
+                    const float* l = scratchPlanar_[0];
+                    const float* r = channelCount_ > 1 ? scratchPlanar_[1] : l;
+                    for (int i = 0; i < n; ++i) {
+                        const size_t base = size_t(i) * size_t(deviceChannels_);
+                        dst[base] = static_cast<int16_t>(std::clamp(l[i], -1.0f, 1.0f) * 32767.0f);
+                        if (deviceChannels_ > 1) {
+                            dst[base + 1] = static_cast<int16_t>(std::clamp(r[i], -1.0f, 1.0f) * 32767.0f);
+                        }
+                        for (int c = 2; c < deviceChannels_; ++c) {
+                            dst[base + size_t(c)] = 0;
+                        }
+                    }
                 }
             } else {
-                // コールバック未登録: 無音を書き込む
-                std::memset(data, 0, size_t(n) * size_t(channelCount_) * sizeof(float));
+                std::memset(data, 0, size_t(available) * size_t(bytesPerFrame_));
             }
 
             renderClient_->ReleaseBuffer(available, 0);
@@ -258,17 +306,20 @@ private:
             AvRevertMmThreadCharacteristics(task);
     }
 
-    IAudioClient*      audioClient_ = nullptr;
+    IAudioClient*       audioClient_ = nullptr;
     IAudioRenderClient* renderClient_ = nullptr;
-    HANDLE             eventHandle_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    AudioCallback      callback_ = nullptr;
-    void*              userData_ = nullptr;
-    int                sampleRate_ = 48000;
-    int                bufferFrames_ = 512;
-    int                channelCount_ = 2;
-    bool               comInitHere_ = false;
-    std::atomic<bool>  running_{false};
-    std::thread        thread_;
+    HANDLE              eventHandle_ = nullptr;
+    AudioCallback       callback_ = nullptr;
+    void*               userData_ = nullptr;
+    int                 sampleRate_ = 48000;
+    int                 bufferFrames_ = 512;
+    int                 deviceChannels_ = 2;
+    int                 channelCount_ = 2;
+    int                 bytesPerFrame_ = 8;
+    bool                isFloat_ = true;
+    bool                comInitHere_ = false;
+    std::atomic<bool>   running_{false};
+    std::thread         thread_;
 
     // コールバックへ渡すプラナーバッファ (open() で事前確保)
     std::vector<float>  scratchData_;

@@ -66,7 +66,10 @@ int main(int argc, char** argv)
 
     // プラグイン走査をバックグラウンドで開始 (1.5 起動シーケンス)
     yave::plugin::PluginManager::instance().scanAsync();
-    yave::audio::AudioRenderEngine::instance().openDevice();
+    QString audioErr;
+    bool audioOk = yave::audio::AudioRenderEngine::instance().openDevice({}, 48000, 512, &audioErr);
+    write_log("Audio openDevice result: " + std::to_string(audioOk) + ", error: " + audioErr.toStdString());
+
 
     yave::ProjectController projectController;
     yave::EditController editController;

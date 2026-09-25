@@ -44,8 +44,13 @@ QString PathResolver::toAbsolute(const QString& relativePath, bool* resolvedOut)
         *resolvedOut = false;
 
     const QString norm = normalizeSeparators(relativePath);
-    if (QDir::isAbsolutePath(norm))
+    if (QDir::isAbsolutePath(norm)) {
+        // 絶対パスはそのまま返す。実在すれば resolvedOut を立てる
+        // (D&D で登録した素材は絶対パスで保存されるため、ここで解決される)。
+        if (resolvedOut)
+            *resolvedOut = QFileInfo::exists(norm);
         return norm;
+    }
 
     // 1. プロジェクトフォルダからの相対
     const QString candidate = projectDir_.filePath(norm);

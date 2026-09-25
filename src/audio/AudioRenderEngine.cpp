@@ -129,8 +129,10 @@ int64_t AudioRenderEngine::currentFrame() const
     // を返す。これを引かないと、映像がバッファ長分だけ音より先行して見える。
     // PDC 分のレイテンシも setOutputLatencySamples に加算済み。
     const int64_t sample = clock_.audibleSamplePosition();
-    return yave::secondsToFrames(double(sample) / double(clock_.sampleRate()),
-                                 timebase_, yave::RoundMode::Nearest);
+    if (sample <= 0)
+        return 0;
+    return std::max<int64_t>(0, yave::secondsToFrames(double(sample) / double(clock_.sampleRate()),
+                                                     timebase_, yave::RoundMode::Nearest));
 }
 
 void AudioRenderEngine::setLoopRange(const TimeRange& r, bool enabled)

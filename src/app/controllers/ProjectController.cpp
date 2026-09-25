@@ -20,6 +20,18 @@ namespace yave {
 
 namespace {
 constexpr auto kLastSavedPathKey = "project/lastSavedPath";
+
+/// FileDialog 等から渡される "file:///..." URL 文字列をローカルパスへ変換する。
+/// 既にローカルパスの場合はそのまま返す。
+QString resolveLocalPath(const QString& pathOrUrl)
+{
+    if (pathOrUrl.contains(QLatin1String("://"))) {
+        const QUrl url(pathOrUrl);
+        if (url.isLocalFile())
+            return url.toLocalFile();
+    }
+    return pathOrUrl;
+}
 }
 
 ProjectController::ProjectController(QObject* parent)
@@ -48,23 +60,29 @@ void ProjectController::newProject(const QString& name)
 
 bool ProjectController::open(const QString& path)
 {
+    const QString localPath = resolveLocalPath(path);
+
     auto loaded = std::make_unique<Project>();
-    const io::LoadResult result = io::ProjectSerializer::load(loaded.get(), path);
+    const io::LoadResult result = io::ProjectSerializer::load(loaded.get(), localPath);
     if (!result.ok) {
         qCWarning(lcApp) << "Failed to open project:" << result.errorMessage;
         return false;
     }
 
     project_ = std::move(loaded);
-    projectPath_ = path;
-    QSettings().setValue(QLatin1String(kLastSavedPathKey), path);
-    emit projectOpened(path);
+    connect(project_->undoStack(), &QUndoStack::cleanChanged, this, [this](bool clean) {
+        Q_UNUSED(clean);
+        emit modifiedChanged();
+    });
+    projectPath_ = localPath;
+    QSettings().setValue(QLatin1String(kLastSavedPathKey), localPath);
+    emit projectOpened(localPath);
     return true;
 }
 
 bool ProjectController::save()
 {
-    if (projectPath_.isEmpty())
+    if (projectPath_.isEmpty() || !project_)
         return false;
     io::SaveOptions opts;
     QString err;
@@ -81,7 +99,7 @@ bool ProjectController::save()
 
 bool ProjectController::saveAs(const QString& path)
 {
-    projectPath_ = path;
+    projectPath_ = resolveLocalPath(path);
     return save();
 }
 
@@ -113,19 +131,15 @@ bool ProjectController::isModified() const
 
 QString ProjectController::registerAsset(const QString& absolutePathOrUrl)
 {
-    QString absolutePath = absolutePathOrUrl;
-    if (absolutePathOrUrl.contains(QLatin1String("://"))) {
-        QUrl url(absolutePathOrUrl);
-        if (url.isLocalFile()) {
-            absolutePath = url.toLocalFile();
-        }
-    }
+    const QString absolutePath = resolveLocalPath(absolutePathOrUrl);
 
     qInfo() << "[registerAsset] resolved path:" << absolutePath
             << "(from:" << absolutePathOrUrl << ")";
 
-    if (!project_)
+    if (!project_) {
+        qWarning() << "[registerAsset] REJECTED: no project is open";
         return {};
+    }
 
     // 1. メディアの情報をプローブする
     media::MediaInfo info = media::MediaProbe::probe(absolutePath);
@@ -157,8 +171,10 @@ QString ProjectController::registerAsset(const QString& absolutePathOrUrl)
 
     // 3. アセットを登録
     Asset* a = project_->assets()->registerAsset(absolutePath, kind);
-    if (!a)
+    if (!a) {
+        qWarning() << "[registerAsset] REJECTED: failed to register asset for path:" << absolutePath;
         return {};
+    }
 
     // 4. メディア情報・プロジェクトタイムベース換算の反映
     if (info.ok) {
