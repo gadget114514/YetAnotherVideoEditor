@@ -1,0 +1,19 @@
+{
+  "name": "yave-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev:web": "pnpm --filter @yave/web dev",
+    "dev:electron": "pnpm --filter @yave/electron dev",
+    "build:web": "pnpm --filter @yave/web build",
+    "build:electron": "pnpm --filter @yave/electron build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.3"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "jsx": "react-jsx"
+  },
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/io" },
+    { "path": "../../packages/engine" },
+    { "path": "../../packages/platform" },
+    { "path": "../../packages/plugin-sdk" },
+    { "path": "../../packages/ui" }
+  ],
+  "include": ["src/**/*"]
+}

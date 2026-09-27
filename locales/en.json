@@ -1,0 +1,12 @@
+{
+  "app": {
+    "title": "Yet Another Video Editor",
+    "ready": "Ready"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "open": "Open"
+  }
+}
