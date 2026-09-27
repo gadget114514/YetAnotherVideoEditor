@@ -14,6 +14,7 @@ import { InspectorPanel } from './panels/InspectorPanel.js';
 import { SubtitleEditorPanel } from './panels/SubtitleEditorPanel.js';
 import { AudioMixerPanel } from './panels/AudioMixerPanel.js';
 import { AiPanel } from './panels/AiPanel.js';
+import { ExportModal } from './dialogs/ExportModal.js';
 
 import {
   Undo,
@@ -109,6 +110,7 @@ const defaultLayout: IJsonModel = {
 export const App: React.FC<AppProps> = ({ host }) => {
   const [model] = useState<Model>(() => Model.fromJson(defaultLayout));
   const [crossOriginIsolated, setCrossOriginIsolated] = useState<boolean>(false);
+  const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
@@ -324,6 +326,27 @@ export const App: React.FC<AppProps> = ({ host }) => {
               <span>Save</span>
             </button>
 
+            <button
+              onClick={() => setIsExportOpen(true)}
+              title="Export Timeline to MP4"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                backgroundColor: '#0284c7',
+                border: 'none',
+                color: '#ffffff',
+                cursor: 'pointer',
+                padding: '4px 10px',
+                fontSize: '12px',
+                borderRadius: '4px',
+                fontWeight: 600,
+              }}
+            >
+              <Download size={14} />
+              <span>Export</span>
+            </button>
+
             <div style={{ width: '1px', height: '16px', backgroundColor: '#27272a', margin: '0 4px' }} />
 
             <button
@@ -408,8 +431,11 @@ export const App: React.FC<AppProps> = ({ host }) => {
         }}
       >
         <span>Tracks: {project.timeline.trackCount} | Revisions: {revision}</span>
-        <span>YAVE 2.0 Web Architecture (M1-M2)</span>
+        <span>YAVE 2.0 Web Architecture</span>
       </footer>
+
+      {/* Export Modal */}
+      <ExportModal isOpen={isExportOpen} onClose={() => setIsExportOpen(false)} />
     </div>
   );
 };

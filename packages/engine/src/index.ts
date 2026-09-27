@@ -19,3 +19,6 @@ export * from './render/WebGlCompositor.js';
 
 // Playback
 export * from './playback/PlaybackController.js';
+
+// Export
+export * from './export/ExportJob.js';

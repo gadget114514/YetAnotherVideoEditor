@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@yave/core": "workspace:*",
-    "@yave/platform": "workspace:*"
+    "@yave/platform": "workspace:*",
+    "mp4-muxer": "^5.2.2"
   }
 }
