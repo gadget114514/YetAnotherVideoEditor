@@ -1,1 +1,0 @@
-cd cmake --build build/win-mingw --target yave_app cmake --build build/win-mingw --target yave_appcmake --build build/win-mingw --target yave_appcmake --build build/win-mingw --target yave_app
