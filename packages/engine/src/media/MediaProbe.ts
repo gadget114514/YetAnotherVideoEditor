@@ -1,4 +1,24 @@
-import * as fs from 'node:fs';
+function getNodeFs(): any {
+  if (typeof process !== 'undefined') {
+    if (typeof (process as any).getBuiltinModule === 'function') {
+      try {
+        return (process as any).getBuiltinModule('fs');
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      const req = (globalThis as any).require;
+      if (typeof req === 'function') {
+        return req('fs');
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
 
 export interface MediaInfo {
   ok: boolean;
@@ -22,11 +42,15 @@ export class MediaProbe {
     let bytes: Uint8Array;
 
     if (typeof source === 'string') {
+      const nodeFs = getNodeFs();
+      if (!nodeFs) {
+        return this.errorResult(`File path probing is not supported in this environment: ${source}`);
+      }
       try {
-        if (!fs.existsSync(source)) {
+        if (!nodeFs.existsSync(source)) {
           return this.errorResult(`File not found: ${source}`);
         }
-        bytes = fs.readFileSync(source);
+        bytes = nodeFs.readFileSync(source);
       } catch (err: any) {
         return this.errorResult(err?.message ?? 'Failed to read file');
       }

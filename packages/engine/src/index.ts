@@ -24,5 +24,11 @@ export * from './playback/PlaybackController.js';
 export * from './subtitle/SubtitleEffects.js';
 export * from './subtitle/SubtitleRenderer.js';
 
+// AI
+export * from './ai/AiOrchestrator.js';
+
+// Plugins
+export * from './plugins/PluginHost.js';
+
 // Export
 export * from './export/ExportJob.js';
