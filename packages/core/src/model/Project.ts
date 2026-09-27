@@ -40,6 +40,9 @@ export class Project {
   timebase: Rational = Timebase.Fps59_94;
   canvasSize: { width: number; height: number } = { width: 1920, height: 1080 };
   sampleRate: number = 48000;
+  setSampleRate(sr: number): void {
+    this.sampleRate = sr;
+  }
   channels: number = 2;
   duration: number = 108000;
   playhead: number = 0;

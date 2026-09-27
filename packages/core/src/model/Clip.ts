@@ -143,6 +143,9 @@ export abstract class Clip {
   setFadeIn(f: number): void {
     this.fadeIn_ = Math.max(0, Math.trunc(f));
   }
+  setFadeInFrames(f: number): void {
+    this.fadeIn_ = Math.max(0, Math.trunc(f));
+  }
   fadeInFrames(): number {
     return this.fadeIn_;
   }
@@ -151,6 +154,9 @@ export abstract class Clip {
     return this.fadeOut_;
   }
   setFadeOut(f: number): void {
+    this.fadeOut_ = Math.max(0, Math.trunc(f));
+  }
+  setFadeOutFrames(f: number): void {
     this.fadeOut_ = Math.max(0, Math.trunc(f));
   }
   fadeOutFrames(): number {

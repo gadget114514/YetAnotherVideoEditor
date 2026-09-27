@@ -12,4 +12,5 @@ export enum BlendMode {
   SoftLight = 'softLight',
   Difference = 'difference',
   Exclusion = 'exclusion',
+  AlphaMask = 'alphaMask',
 }

@@ -1,0 +1,17 @@
+export const ja: Record<string, string> = {
+  Export: '書き出し',
+  Import: '取り込み',
+  'New Project': '新規プロジェクト',
+  'Open Project': 'プロジェクトを開く',
+  'Save Project': 'プロジェクトを保存',
+  Undo: '元に戻す',
+  Redo: 'やり直す',
+  Timeline: 'タイムライン',
+  Preview: 'プレビュー',
+  Inspector: 'インスペクタ',
+  'Media Library': 'メディアライブラリ',
+  'Effect Library': 'エフェクトライブラリ',
+  'Subtitle Editor': '字幕エディタ',
+  'Audio Mixer': 'オーディオミキサー',
+  'AI Studio': 'AIスタジオ',
+};

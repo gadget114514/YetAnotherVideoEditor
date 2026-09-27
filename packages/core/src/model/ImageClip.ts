@@ -25,6 +25,10 @@ export class ImageClip extends Clip {
       transform: { ...this.transform },
       crop: { ...this.crop },
       filters: [...this.filters],
+      source: {
+        kind: 'image',
+        assetId: this.assetId,
+      },
     };
   }
 }

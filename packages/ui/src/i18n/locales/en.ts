@@ -1,0 +1,17 @@
+export const en: Record<string, string> = {
+  Export: 'Export',
+  Import: 'Import',
+  'New Project': 'New Project',
+  'Open Project': 'Open Project',
+  'Save Project': 'Save Project',
+  Undo: 'Undo',
+  Redo: 'Redo',
+  Timeline: 'Timeline',
+  Preview: 'Preview',
+  Inspector: 'Inspector',
+  'Media Library': 'Media Library',
+  'Effect Library': 'Effect Library',
+  'Subtitle Editor': 'Subtitle Editor',
+  'Audio Mixer': 'Audio Mixer',
+  'AI Studio': 'AI Studio',
+};

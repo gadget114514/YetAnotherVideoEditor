@@ -147,6 +147,17 @@ export const Timebase = {
 
 export const Timebases = Timebase;
 
+export const RationalUtil = {
+  create: (num: number, den: number) => new Rational(num, den),
+  reduce: (num: number, den: number) => Rational.reduced(num, den),
+  toDouble: (r: RationalData) => (r.den !== 0 ? r.num / r.den : 0),
+  invert: (r: RationalData) => new Rational(r.den, r.num),
+  multiply: (a: RationalData, b: RationalData) => new Rational(a.num, a.den).mul(b),
+  add: (a: RationalData, b: RationalData) => new Rational(a.num, a.den).add(b),
+  equals: (a: RationalData, b: RationalData) => new Rational(a.num, a.den).equals(b),
+  compare: (a: RationalData, b: RationalData) => new Rational(a.num, a.den).compare(b),
+};
+
 export function secondsToFrames(seconds: number, tb: RationalData, mode: RoundMode = RoundMode.Nearest): number {
   if (tb.den === 0 || tb.num === 0) return 0;
   // frames = seconds * (tb.den / tb.num)

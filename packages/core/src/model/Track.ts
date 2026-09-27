@@ -57,6 +57,10 @@ export class Track {
     return this.clips_;
   }
 
+  clipAtIdx(idx: number): Clip | null {
+    return this.clips_[idx] ?? null;
+  }
+
   get transitions(): readonly Transition[] {
     return this.transitions_;
   }

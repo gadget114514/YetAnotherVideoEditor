@@ -12,6 +12,13 @@ export interface TransitionRef {
   color: number[];
 }
 
+export type LayerSource =
+  | { kind: 'video'; assetId: string; sourceFrameIndex: number }
+  | { kind: 'subtitle'; clipId: string; text: string; style: any }
+  | { kind: 'image'; assetId: string }
+  | { kind: 'color'; color: string }
+  | { kind: 'placeholder'; title: string; progress: number };
+
 export interface LayerItem {
   trackId: Uuid;
   clipId: Uuid;
@@ -32,10 +39,12 @@ export interface LayerItem {
   };
   filters: VideoFilterInstance[];
   transition?: TransitionRef;
+  source?: LayerSource;
 }
 
 export interface RenderSnapshot {
   readonly frameIndex: number;
   readonly timebase: Rational;
+  readonly canvasSize?: { readonly width: number; readonly height: number };
   readonly layers: readonly LayerItem[];
 }

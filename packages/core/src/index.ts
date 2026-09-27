@@ -1,6 +1,7 @@
 export * from './id/Uuid.js';
 export * from './time/Rational.js';
 export * from './time/TimeRange.js';
+export * from './time/Timecode.js';
 export * from './model/BlendMode.js';
 export * from './model/VideoFilter.js';
 export * from './model/Transition.js';

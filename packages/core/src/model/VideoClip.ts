@@ -98,6 +98,11 @@ export class VideoClip extends Clip {
       transform: { ...this.transform },
       crop: { ...this.crop },
       filters: [...this.filters],
+      source: {
+        kind: 'video',
+        assetId: this.assetId,
+        sourceFrameIndex: this.mapToSourceFrame(frame),
+      },
     };
   }
 }

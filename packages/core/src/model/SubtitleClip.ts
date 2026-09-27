@@ -185,6 +185,12 @@ export class SubtitleClip extends Clip {
       transform: { ...this.transform },
       crop: { ...this.crop },
       filters: [...this.filters],
+      source: {
+        kind: 'subtitle',
+        clipId: this.id,
+        text: this.text.plain,
+        style: this.styleOverride_,
+      },
     };
   }
 }

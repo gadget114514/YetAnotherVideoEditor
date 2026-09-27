@@ -25,6 +25,10 @@ export class ColorClip extends Clip {
       transform: { ...this.transform },
       crop: { ...this.crop },
       filters: [...this.filters],
+      source: {
+        kind: 'color',
+        color: this.color,
+      },
     };
   }
 }

@@ -35,6 +35,11 @@ export class AiPlaceholderClip extends Clip {
       transform: { ...this.transform },
       crop: { ...this.crop },
       filters: [...this.filters],
+      source: {
+        kind: 'placeholder',
+        title: this.name,
+        progress: this.progress,
+      },
     };
   }
 }
