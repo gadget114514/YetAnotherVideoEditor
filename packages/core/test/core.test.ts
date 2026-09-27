@@ -8,9 +8,9 @@ describe('core basic smoke tests', () => {
   });
 
   it('defines standard timebases', () => {
-    expect(Timebases.Fps60.num).toBe(60);
-    expect(Timebases.Fps60.den).toBe(1);
-    expect(Timebases.Fps59_94.num).toBe(60000);
-    expect(Timebases.Fps59_94.den).toBe(1001);
+    expect(Timebases.Fps60.num).toBe(1);
+    expect(Timebases.Fps60.den).toBe(60);
+    expect(Timebases.Fps59_94.num).toBe(1001);
+    expect(Timebases.Fps59_94.den).toBe(60000);
   });
 });

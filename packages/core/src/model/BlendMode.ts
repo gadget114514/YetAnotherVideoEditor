@@ -1,0 +1,15 @@
+export enum BlendMode {
+  Normal = 'normal',
+  Add = 'add',
+  Multiply = 'multiply',
+  Screen = 'screen',
+  Overlay = 'overlay',
+  Darken = 'darken',
+  Lighten = 'lighten',
+  ColorDodge = 'colorDodge',
+  ColorBurn = 'colorBurn',
+  HardLight = 'hardLight',
+  SoftLight = 'softLight',
+  Difference = 'difference',
+  Exclusion = 'exclusion',
+}
