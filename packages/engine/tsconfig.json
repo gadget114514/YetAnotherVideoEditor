@@ -6,7 +6,8 @@
   },
   "references": [
     { "path": "../core" },
-    { "path": "../platform" }
+    { "path": "../platform" },
+    { "path": "../plugin-sdk" }
   ],
   "include": ["src/**/*"]
 }

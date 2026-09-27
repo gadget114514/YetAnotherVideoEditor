@@ -32,10 +32,13 @@ export interface SubtitleStyleDiff {
   outlineWidth?: number;
   shadowColor?: string;
   shadowBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
+  shadowOffset?: { x: number; y: number };
   boxEnabled?: boolean;
   boxColor?: string;
-  hAlign?: number;
-  vAlign?: number;
+  hAlign?: number | 'left' | 'center' | 'right';
+  vAlign?: number | 'top' | 'middle' | 'bottom';
   anchor?: { x: number; y: number };
   lineSpacing?: number;
   letterSpacing?: number;

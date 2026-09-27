@@ -20,5 +20,9 @@ export * from './render/WebGlCompositor.js';
 // Playback
 export * from './playback/PlaybackController.js';
 
+// Subtitle
+export * from './subtitle/SubtitleEffects.js';
+export * from './subtitle/SubtitleRenderer.js';
+
 // Export
 export * from './export/ExportJob.js';
