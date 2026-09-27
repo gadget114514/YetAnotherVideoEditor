@@ -14,7 +14,7 @@ AddTrackCommand::AddTrackCommand(Project* project, TrackType type, int index,
     : UndoCommandBase(project, QObject::tr("Add track"))
     , type_(type)
     , index_(index)
-    , name_(name.isEmpty() ? QObject::tr("Track %1").arg(index + 1) : name)
+    , name_(name.isEmpty() ? Timeline::defaultTrackName(type, index + 1) : name)
 {
 }
 

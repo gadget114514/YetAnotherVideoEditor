@@ -67,6 +67,13 @@ Rectangle {
     function zoomIn()  { zoomFactor = Math.min(4.0, zoomFactor * 1.5) }
     function zoomOut() { zoomFactor = Math.max(0.05, zoomFactor / 1.5) }
 
+    // トラック追加後、新しい行が画面外に隠れないようスクロールする。
+    function addTrackAndReveal(type, index) {
+        const row = editController.addTrack(type, index)
+        if (row >= 0)
+            root.positionViewAtIndex(row, ListView.Contain)
+    }
+
     function clipListModelForTrack(trackIndex) {
         return root.trackModel ? root.trackModel.clipModelProvider(trackIndex) : null
     }
@@ -160,19 +167,19 @@ Rectangle {
                 text: qsTr("+ Video Track")
                 implicitHeight: 20
                 font.pixelSize: 10
-                onClicked: editController.addTrack("video", -1)
+                onClicked: container.addTrackAndReveal("video", -1)
             }
             Button {
                 text: qsTr("+ Audio Track")
                 implicitHeight: 20
                 font.pixelSize: 10
-                onClicked: editController.addTrack("audio", -1)
+                onClicked: container.addTrackAndReveal("audio", -1)
             }
             Button {
                 text: qsTr("+ Subtitle Track")
                 implicitHeight: 20
                 font.pixelSize: 10
-                onClicked: editController.addTrack("subtitle", -1)
+                onClicked: container.addTrackAndReveal("subtitle", -1)
             }
 
             Item { Layout.fillWidth: true }
@@ -190,6 +197,9 @@ Rectangle {
             id: rulerRow
             Layout.fillWidth: true
             Layout.preferredHeight: 22
+            // 子が fillHeight を持つと入れ子 Layout も既定で fillHeight になり、
+            // トラックリストの高さを奪ってしまうので明示的に固定する。
+            Layout.fillHeight: false
             spacing: 0
 
             Rectangle {
@@ -301,6 +311,10 @@ Rectangle {
             orientation: ListView.Vertical
             boundsBehavior: Flickable.StopAtBounds
 
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
+
             Rectangle {
                 anchors.fill: parent
                 color: "#191919"
@@ -317,6 +331,29 @@ Rectangle {
                 visible: playheadFrame >= 0
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
+            }
+
+            // プレイヘッドのドラッグハンドル (トラック領域内でもカーソルを掴んで動かせるように、
+            // 細い線そのものより広い当たり判定を持たせる)
+            MouseArea {
+                id: playheadHandle
+                x: playheadLine.x - 5
+                width: 11
+                z: 11
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                cursorShape: Qt.SizeHorCursor
+                preventStealing: true
+
+                function frameFromMouseX(mx) {
+                    return (playheadHandle.x + mx - container.trackHeaderWidth) / container.zoomFactor
+                }
+
+                onPressed: (mouse) => container.seekToFrame(frameFromMouseX(mouse.x))
+                onPositionChanged: (mouse) => {
+                    if (pressed)
+                        container.seekToFrame(frameFromMouseX(mouse.x))
+                }
             }
 
             delegate: Row {
@@ -546,18 +583,27 @@ Rectangle {
                         }
                     }
 
-                    // 空き領域の右クリック -> レーンコンテキストメニュー
+                    // 空き領域のクリック/ドラッグ -> トラック選択 + プレイヘッド移動
+                    // (右クリックはレーンコンテキストメニュー)
                     MouseArea {
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onPressed: (mouse) => {
+                            if (mouse.button === Qt.RightButton)
+                                return
+                            container.trackSelected(trackRow.trackId)
+                            container.seekToFrame(mouse.x / container.zoomFactor)
+                        }
+                        onPositionChanged: (mouse) => {
+                            if (pressed)
+                                container.seekToFrame(mouse.x / container.zoomFactor)
+                        }
                         onClicked: (mouse) => {
                             if (mouse.button === Qt.RightButton) {
                                 laneMenu.trackIndex = trackRow.trackIndex
                                 laneMenu.trackId = trackRow.trackId
                                 laneMenu.frame = Math.max(0, Math.round(mouse.x / container.zoomFactor))
                                 laneMenu.popup()
-                            } else {
-                                container.trackSelected(trackRow.trackId)
                             }
                         }
                     }
@@ -945,15 +991,15 @@ if (isSub) {
         MenuSeparator {}
         MenuItem {
             text: qsTr("Add Video Track")
-            onTriggered: editController.addTrack("video", -1)
+            onTriggered: container.addTrackAndReveal("video", -1)
         }
         MenuItem {
             text: qsTr("Add Audio Track")
-            onTriggered: editController.addTrack("audio", -1)
+            onTriggered: container.addTrackAndReveal("audio", -1)
         }
         MenuItem {
             text: qsTr("Add Subtitle Track")
-            onTriggered: editController.addTrack("subtitle", -1)
+            onTriggered: container.addTrackAndReveal("subtitle", -1)
         }
     }
 
@@ -968,15 +1014,15 @@ if (isSub) {
         MenuSeparator {}
         MenuItem {
             text: qsTr("Add Video Track")
-            onTriggered: editController.addTrack("video", -1)
+            onTriggered: container.addTrackAndReveal("video", -1)
         }
         MenuItem {
             text: qsTr("Add Audio Track")
-            onTriggered: editController.addTrack("audio", -1)
+            onTriggered: container.addTrackAndReveal("audio", -1)
         }
         MenuItem {
             text: qsTr("Add Subtitle Track")
-            onTriggered: editController.addTrack("subtitle", -1)
+            onTriggered: container.addTrackAndReveal("subtitle", -1)
         }
     }
 }

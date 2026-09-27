@@ -207,15 +207,48 @@ ApplicationWindow {
                         anchors.rightMargin: 8
                         spacing: 8
 
+                        // ---- 早戻し (1秒分シークバック) ----
                         Button {
-                            text: playbackController.isPlaying ? qsTr("Pause") : qsTr("Play")
-                            onClicked: playbackController.isPlaying
-                                           ? playbackController.pause()
-                                           : playbackController.play()
+                            text: "◄◄"
+                            implicitWidth: 32
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Rewind")
+                            onClicked: {
+                                const step = Math.max(1, Math.round(playbackController.fps))
+                                const f = Math.max(0, playbackController.currentFrame() - step)
+                                root.playheadFrame = f
+                                playbackController.seek(f)
+                            }
+                        }
+
+                        Button {
+                            text: qsTr("Play")
+                            enabled: !playbackController.isPlaying
+                            onClicked: playbackController.play()
+                        }
+                        Button {
+                            text: qsTr("Pause")
+                            enabled: playbackController.isPlaying
+                            onClicked: playbackController.pause()
                         }
                         Button {
                             text: qsTr("Stop")
                             onClicked: playbackController.stop()
+                        }
+
+                        // ---- 先送り (1秒分シークフォワード) ----
+                        Button {
+                            text: "►►"
+                            implicitWidth: 32
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Fast Forward")
+                            onClicked: {
+                                const step = Math.max(1, Math.round(playbackController.fps))
+                                const f = Math.min(playbackController.duration,
+                                                   playbackController.currentFrame() + step)
+                                root.playheadFrame = f
+                                playbackController.seek(f)
+                            }
                         }
 
                         // ---- ルーラ / シークバー ----

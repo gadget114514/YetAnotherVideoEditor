@@ -9,9 +9,7 @@
 
 namespace yave {
 
-namespace {
-
-QString defaultTrackName(TrackType type, int ordinal)
+QString Timeline::defaultTrackName(TrackType type, int ordinal)
 {
     switch (type) {
     case TrackType::Video:    return QObject::tr("Video %1").arg(ordinal);
@@ -22,8 +20,6 @@ QString defaultTrackName(TrackType type, int ordinal)
     }
     return QObject::tr("Track %1").arg(ordinal);
 }
-
-} // anonymous namespace
 
 // ===========================================================================
 //  構築 / 破棄

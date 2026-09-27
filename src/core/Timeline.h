@@ -39,6 +39,8 @@ public:
 
     // ================= トラック操作 =================
 
+    static QString defaultTrackName(TrackType type, int ordinal);
+
     /// 末尾 (最背面から数えて最前面) に追加する。既定名は type に応じて自動生成。
     Track* appendTrack(TrackType type, const QString& name = {});
 
