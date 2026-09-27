@@ -6,421 +6,311 @@
 
 ## 2.1 全体構造
 
-```
-YetAnotherVideoEditor/
-├── CMakeLists.txt                  ルートビルド定義 (1.4.3 参照)
-├── CMakePresets.json               Win/Mac 用のプリセット
-├── vcpkg.json                      Windows 依存 manifest
-├── .clang-format                   コーディングスタイル (LLVM ベース / 4 space / 110 col)
-├── .clang-tidy
-├── README.md
-│
-├── cmake/                          自作 CMake モジュール
-│   ├── FindFFmpeg.cmake
-│   ├── PlatformConfig.cmake        コンパイルフラグ・警告レベル・SIMD 設定
-│   ├── YaveShaders.cmake           .vert/.frag -> .qsb 変換のヘルパ関数
-│   └── YaveDeploy.cmake            windeployqt / macdeployqt ラッパ
-│
-├── doc/                            本設計書
-│   ├── design.md
-│   └── design/
-│       └── 01..12-*.md
-│
-├── include/yave/                   公開ヘッダ (SDK として外部に出すもののみ)
-│   ├── sdk/
-│   │   ├── SubtitleEffectApi.h     字幕エフェクトプラグインの C ABI 定義
-│   │   ├── ISubtitleEffect.h       プラグイン作者が実装するインタフェース
-│   │   ├── ParameterSchema.h
-│   │   └── YaveSdkVersion.h
-│   └── YaveExport.h                DLL エクスポートマクロ
-│
-├── src/
-│   ├── CMakeLists.txt
-│   │
-│   ├── core/                       yave_core : Qt Core のみ依存
-│   │   ├── CMakeLists.txt
-│   │   ├── Rational.h / .cpp
-│   │   ├── TimeRange.h / .cpp
-│   │   ├── Clip.h / .cpp
-│   │   ├── VideoClip.h / .cpp
-│   │   ├── AudioClip.h / .cpp
-│   │   ├── AiPlaceholderClip.h / .cpp
-│   │   ├── TitleClip.h / .cpp      タイトル/テロップ。SubtitleClip 派生 (3.11)
-│   │   ├── VideoFilter.h           クリップのビデオフィルタ 1 段 (3.9)
-│   │   ├── Transition.h            クリップ境界のトランジション (3.10)
-│   │   ├── CutClip.h / .cpp        AIトラックの 1 区間 = 演出指示 (13章)
-│   │   ├── StoryBible.h / .cpp     キャラ/ロケ/画風。プロンプトへカスケードする
-│   │   ├── Track.h / .cpp
-│   │   ├── Timeline.h / .cpp
-│   │   ├── Project.h / .cpp
-│   │   ├── AssetLibrary.h / .cpp   素材(ファイル)の登録・参照カウント・プロキシ管理
-│   │   ├── RenderSnapshot.h / .cpp UI -> Render の受け渡し構造体
-│   │   ├── ai/                     AI の純データ型 (Qt Core のみ依存。13.14.3)
-│   │   │   └── AiGenerationParams.h / .cpp
-│   │   └── commands/               QUndoCommand 派生
-│   │       ├── AddTrackCommand.h
-│   │       ├── RemoveTrackCommand.h
-│   │       ├── ReorderTrackCommand.h
-│   │       ├── AddClipCommand.h
-│   │       ├── MoveClipCommand.h
-│   │       ├── TrimClipCommand.h
-│   │       ├── SplitClipCommand.h
-│   │       ├── ImportSubtitleCommand.h
-│   │       ├── AddFilterCommand.h              ┐
-│   │       ├── RemoveFilterCommand.h           │
-│   │       ├── ReorderFilterCommand.h          ├ 3.9 / 3.10
-│   │       ├── AddTransitionCommand.h          │
-│   │       ├── RemoveTransitionCommand.h       │
-│   │       ├── AddSubtitleEffectCommand.h      ┘
-│   │       ├── CommitGeneratedAssetCommand.h
-│   │       ├── AddCutCommand.h                 ┐
-│   │       ├── RemoveCutCommand.h              │
-│   │       ├── ReorderCutsCommand.h            │
-│   │       ├── EditCutSpecCommand.h            ├ 13.9
-│   │       ├── SetCutStatusCommand.h           │
-│   │       ├── BindCutOutputCommand.h          │
-│   │       ├── EditStoryBibleCommand.h         │
-│   │       ├── ApplyStoryboardPlanCommand.h    │
-│   │       └── FitCutToDialogueCommand.h       ┘
-│   │
-│   ├── media/                      yave_media : FFmpeg
-│   │   ├── FFmpegRaii.h            AVFrame/AVPacket/AVCodecContext の unique_ptr Deleter
-│   │   ├── MediaProbe.h / .cpp     ファイルのストリーム情報取得
-│   │   ├── VideoDecoder.h / .cpp
-│   │   ├── AudioDecoder.h / .cpp
-│   │   ├── HwDeviceContext.h / .cpp  HW デバイス生成と優先順位決定
-│   │   ├── FrameCache.h / .cpp     LRU デコード済みフレームキャッシュ
-│   │   ├── FrameQueue.h            SPSC ロックフリーリングバッファ
-│   │   ├── DecodeWorkerPool.h / .cpp
-│   │   ├── VideoEncoder.h / .cpp
-│   │   ├── AudioEncoder.h / .cpp
-│   │   ├── Muxer.h / .cpp
-│   │   └── ExportJob.h / .cpp      書き出しジョブ (プレビューとは別経路)
-│   │
-│   ├── render/                     yave_render : QRhi
-│   │   ├── RhiContext.h / .cpp     QRhi 生成とバックエンド選択
-│   │   ├── RhiCompositor.h / .cpp  レイヤー合成の中核
-│   │   ├── TexturePool.h / .cpp
-│   │   ├── BlendMode.h
-│   │   ├── LayerPass.h / .cpp      1 レイヤー分の描画パス
-│   │   ├── FilterPass.h / .cpp     ビデオフィルタの適用 (3.9)
-│   │   ├── TransitionPass.h / .cpp 境界トランジションの合成 (3.10)
-│   │   ├── ColorSpace.h / .cpp     YUV->RGB 行列、HDR トーンマップ
-│   │   └── shaders/
-│   │       ├── fullscreen.vert
-│   │       ├── layer_blend.frag    ブレンドモード分岐を含む
-│   │       ├── yuv_to_rgb.frag
-│   │       ├── filter_color.frag   輝度/コントラスト/彩度/ガンマ/色行列
-│   │       ├── filter_blur.frag    分離ガウシアン (2 パス)
-│   │       ├── transition.frag     dissolve / wipe / slide / push を mode で分岐
-│   │       └── subtitle_glyph.vert / .frag   インスタンシング描画用
-│   │
-│   ├── audio/                      yave_audio
-│   │   ├── IAudioDevice.h          デバイス抽象 (open/start/stop/callback)
-│   │   ├── AudioRenderEngine.h / .cpp
-│   │   ├── AudioRenderGraph.h / .cpp  RT スレッドが読む POD グラフ
-│   │   ├── AudioClock.h            サンプル単位のアトミック再生位置
-│   │   ├── LockFreeRingBuffer.h
-│   │   ├── DelayCompensator.h / .cpp  PDC
-│   │   ├── Resampler.h / .cpp      libswresample ラッパ
-│   │   └── MeterBridge.h / .cpp    RT -> UI のレベル通知
-│   │
-│   ├── subtitle/                   yave_subtitle
-│   │   ├── SubtitleClip.h / .cpp
-│   │   ├── SubtitleText.h / .cpp   リッチスパン付きテキスト
-│   │   ├── SubtitleStyle.h / .cpp
-│   │   ├── SubtitleStylePreset.h / .cpp
-│   │   ├── SubtitleLayout.h / .cpp QTextLayout -> SubtitleGlyphRun
-│   │   ├── SubtitleGlyphRun.h
-│   │   ├── GlyphAtlas.h / .cpp     ラスタライズ結果の QRhiTexture 管理
-│   │   ├── SubtitleRenderer.h / .cpp
-│   │   ├── SubtitleEffectInstance.h / .cpp
-│   │   ├── SubtitleEffectRegistry.h / .cpp
-│   │   ├── effects/                組み込みエフェクト (ISubtitleEffect 実装)
-│   │   │   ├── FadeEffect.cpp
-│   │   │   ├── TypewriterEffect.cpp
-│   │   │   ├── KaraokeEffect.cpp
-│   │   │   ├── SlideInEffect.cpp
-│   │   │   ├── PopPerCharEffect.cpp
-│   │   │   ├── WaveEffect.cpp
-│   │   │   └── BlurEffect.cpp
-│   │   └── io/
-│   │       ├── SrtParser.h / .cpp
-│   │       ├── SrtWriter.h / .cpp
-│   │       ├── AssParser.h / .cpp
-│   │       ├── AssWriter.h / .cpp
-│   │       └── VttParser.h / .cpp
-│   │
-│   ├── ai/                         yave_ai
-│   │   ├── AiGenerationTask.h / .cpp
-│   │   ├── AiGenerationOrchestrator.h / .cpp
-│   │   ├── IGenerationProvider.h
-│   │   ├── ProviderRegistry.h / .cpp
-│   │   ├── GenerationCache.h / .cpp
-│   │   ├── ReferenceFrameExtractor.h / .cpp  I2V/V2V の参照フレーム取り出し
-│   │   ├── ParamCascade.h / .cpp        Bible→トラック→カット→出力 の 4 段マージ
-│   │   ├── CutPromptComposer.h / .cpp   構造化フィールド -> プロンプト文字列
-│   │   ├── RoleTrackResolver.h / .cpp   出力役割 -> 配置先トラックの解決 (冪等)
-│   │   ├── StoryboardBatchJob.h / .cpp  依存 DAG による一括生成
-│   │   ├── StoryboardPlanner.h / .cpp   L1: 自然言語 -> カット列のリクエスト
-│   │   ├── StoryboardPlanParser.h / .cpp  L1 応答の検証 (信頼できない入力として扱う)
-│   │   └── providers/
-│   │       ├── OnnxLocalProvider.h / .cpp
-│   │       ├── RemoteHttpProvider.h / .cpp
-│   │       ├── SidecarProvider.h / .cpp
-│   │       └── ProviderCapability.h
-│   │
-│   ├── plugin/                     yave_plugin
-│   │   ├── PluginManager.h / .cpp
-│   │   ├── PluginDescriptor.h
-│   │   ├── PluginWindow.h / .cpp   QWidget 派生。ポップアップ窓
-│   │   ├── vst3/
-│   │   │   ├── Vst3Host.h / .cpp
-│   │   │   ├── Vst3Registry.h / .cpp
-│   │   │   ├── Vst3ComponentHandler.h / .cpp
-│   │   │   ├── Vst3RunLoop.h / .cpp        Linux 用フック(将来用)
-│   │   │   └── Vst3ProcessorNode.h / .cpp  AudioRenderGraph 上のノード
-│   │   ├── subtitle/
-│   │   │   ├── SubtitleEffectLoader.h / .cpp   .dll/.dylib の C ABI ロード
-│   │   │   └── BuiltinEffectFactory.h / .cpp
-│   │   └── aviutl/                 ★ Windows のみビルド対象
-│   │       ├── AviUtlHost.h / .cpp
-│   │       ├── AviUtlRegistry.h / .cpp
-│   │       ├── AviUtlFrameBridge.h / .cpp  RGBA <-> YC48 変換
-│   │       ├── AviUtlSubtitleEffectAdapter.h / .cpp
-│   │       └── AviUtlWindowProc.h / .cpp
-│   │
-│   ├── platform/
-│   │   ├── PlatformNative.h        共通の前方宣言 (NativeViewHandle 型など)
-│   │   ├── win/
-│   │   │   ├── D3D11Interop.cpp    ID3D11Texture2D -> QRhiTexture
-│   │   │   ├── WasapiDevice.cpp
-│   │   │   └── Win32NativeView.cpp
-│   │   └── mac/
-│   │       ├── MetalInterop.mm     CVPixelBuffer/IOSurface -> MTLTexture
-│   │       ├── CoreAudioDevice.cpp
-│   │       └── MacNativeView.mm    NSView 取得 (Objective-C++)
-│   │
-│   ├── io/                         プロジェクト保存
-│   │   ├── ProjectSerializer.h / .cpp
-│   │   ├── JsonKeys.h              JSON キー文字列の一元定義
-│   │   ├── SchemaMigration.h / .cpp
-│   │   └── PathResolver.h / .cpp   相対 <-> 絶対パス変換
-│   │
-│   ├── i18n/
-│   │   └── LanguageManager.h / .cpp
-│   │
-│   ├── app/                        yave_app
-│   │   ├── CMakeLists.txt
-│   │   ├── main.cpp
-│   │   ├── controllers/
-│   │   │   ├── ProjectController.h / .cpp
-│   │   │   ├── EditController.h / .cpp
-│   │   │   ├── PlaybackController.h / .cpp
-│   │   │   ├── AiController.h / .cpp
-│   │   │   ├── StoryboardController.h / .cpp  AIトラック。L1/バッチ/ボード (13.11.6)
-│   │   │   ├── PluginController.h / .cpp
-│   │   │   └── PanelLayoutController.h / .cpp  ドック/タブ配置の永続化 (1.7.3)
-│   │   ├── library/
-│   │   │   └── LibraryStore.h / .cpp      6 カテゴリのフォルダ木とアイテム (1.7.5)
-│   │   ├── models/
-│   │   │   ├── TimelineModel.h / .cpp     QAbstractItemModel
-│   │   │   ├── TrackListModel.h / .cpp
-│   │   │   ├── ClipListModel.h / .cpp
-│   │   │   ├── EffectStackModel.h / .cpp
-│   │   │   ├── SelectionModel.h / .cpp    選択状態。永続化も Undo もしない (13.5)
-│   │   │   ├── CutListModel.h / .cpp      ボードビュー用
-│   │   │   ├── LibraryTreeModel.h / .cpp  ライブラリのフォルダツリー (11.19.1)
-│   │   │   ├── LibraryItemsModel.h / .cpp 選択フォルダの中身
-│   │   │   └── ParameterModel.h / .cpp    parameterSchema -> UI 自動生成
-│   │   ├── items/
-│   │   │   ├── PreviewItem.h / .cpp       QQuickRhiItem 派生のプレビュー表示
-│   │   │   └── ThumbnailImageProvider.h / .cpp
-│   │   │                                  image://yave-thumb/<assetId> (1.7.5)
-│   │   └── qml/
-│   │       ├── MainWindow.qml              ドックエリア + タブ構成のシェル (1.7)
-│   │       ├── panels/
-│   │       │   ├── PanelRegistry.qml       タブ可能な 8 パネルの定義表 (1.7.1)
-│   │       │   ├── DockArea.qml            1 エリア = 1 タブグループ
-│   │       │   ├── FileBrowserPanel.qml
-│   │       │   └── ConsolePanel.qml
-│   │       ├── library/                    mediaLibrary / effectLibrary の共通実装 (1.7.5)
-│   │       │   ├── LibraryPanel.qml        担当カテゴリを変えて 2 インスタンス使う
-│   │       │   ├── LibraryTree.qml         フォルダツリー。作成/改名/削除/移動
-│   │       │   ├── LibraryItemView.qml     一覧/小アイコン/大アイコン/詳細 の 4 モード
-│   │       │   ├── LibraryItemDelegate.qml アイテム 1 個。ドラッグ元
-│   │       │   ├── LibraryIcon.qml         アイコン解決 (上書き -> サムネ -> 組み込み)
-│   │       │   └── LibraryToolbar.qml      表示モード / アイコンサイズ / 検索
-│   │       ├── icons/                      組み込み SVG (qt_add_qml_module RESOURCES)
-│   │       │   ├── cat_media.svg / cat_transition.svg / cat_title.svg
-│   │       │   ├── cat_subtitle.svg / cat_filter.svg / cat_effect.svg
-│   │       │   └── kind_video.svg / kind_audio.svg / kind_image.svg / folder.svg
-│   │       ├── timeline/
-│   │       │   ├── TimelineView.qml
-│   │       │   ├── TrackHeader.qml
-│   │       │   ├── ClipItem.qml
-│   │       │   ├── SubtitleClipItem.qml
-│   │       │   ├── CutClipItem.qml        AIトラック上のカット表示 (13.11.3)
-│   │       │   └── Ruler.qml
-│   │       ├── inspector/
-│   │       │   ├── InspectorPanel.qml
-│   │       │   ├── SubtitleInspector.qml
-│   │       │   ├── EffectStackEditor.qml
-│   │       │   └── AutoParameterForm.qml  ParameterSchema からの自動生成
-│   │       ├── ai/
-│   │       │   ├── AiGenerateDialog.qml
-│   │       │   ├── AiTaskListPanel.qml        タブ可能パネル `aiTasks` (1.7.1)
-│   │       │   ├── StoryboardBoardPanel.qml   絵コンテのカード一覧 (13.11.1)。タブ可能パネル `storyboardBoard`
-│   │       │   ├── CutInspector.qml           カットの構造化フィールド編集
-│   │       │   ├── StoryBibleEditor.qml
-│   │       │   ├── StoryboardPlanDialog.qml   L1 の要求入力と差分プレビュー
-│   │       │   └── BatchGenerateDialog.qml    見積り表示と送信同意
-│   │       └── common/
-│   │           ├── Theme.qml
-│   │           └── IconButton.qml
-│   │
-│   └── util/
-│       ├── Log.h / .cpp            カテゴリ付きロギング (QLoggingCategory)
-│       ├── Result.h                Result<T, Error> (例外を使わない層のため)
-│       ├── ScopeGuard.h
-│       └── Hash.h
-│
-├── i18n/                           翻訳ソース
-│   ├── yave_ja.ts
-│   └── yave_en.ts
-│
-├── resources/
-│   ├── ai/
-│   │   ├── storyboard_plan.schema.json  L1 の契約スキーマ (13.7.2)
-│   │   ├── prompt_templates.json        役割ごとの既定テンプレート
-│   │   └── camera_phrases.json          カメラワーク -> 英語フレーズ (翻訳経路に載せない)
-│   ├── icons/
-│   ├── fonts/
-│   └── yave.qrc
-│
-├── plugins_sdk_example/            字幕エフェクトプラグインのサンプル実装
-│   ├── CMakeLists.txt
-│   └── GlitchEffect.cpp
-│
-├── third_party/
-│   ├── CMakeLists.txt
-│   ├── vst3sdk/                    FetchContent で取得(コミットしない)
-│   └── aviutl_sdk/                 ヘッダのみ同梱
-│       ├── filter.h
-│       └── input.h
-│
-└── tests/
-    ├── CMakeLists.txt
-    ├── tst_rational.cpp
-    ├── tst_timeline.cpp
-    ├── tst_srtparser.cpp
-    ├── tst_projectserializer.cpp
-    ├── tst_delaycompensator.cpp
-    ├── tst_cutclip.cpp             CutClip 往復 / specHash の除外集合 (13.13)
-    ├── tst_cutcascade.cpp          4 段マージ / provenance / 継承リセット
-    ├── tst_roletrackresolver.cpp   冪等性 / Z 配置の決定性
-    ├── tst_batchdag.cpp            トポロジカルソート / dirtiness の伝播
-    ├── tst_storyboardplan.cpp      L1 応答の検証 (敵対的入力を含む)
-    ├── tst_promptcomposer.cpp
-    ├── tst_selectionmodel.cpp
-    └── data/
-        ├── sample.srt
-        ├── sample_project.yave
-        ├── storyboard_plan_valid.json
-        └── storyboard_plan_hostile.json
-```
-
-## 2.2 モジュール依存関係
-
-矢印は「左が右に依存する」。循環依存を作らないこと。
+YAVE は `pnpm workspace` を用いた monorepo 構成を採用する。
 
 ```
-yave_app ──┬── yave_render ──┬── yave_media ── yave_core
-           │                 └── yave_subtitle ── yave_core
-           ├── yave_audio ──── yave_core
-           ├── yave_ai ─────── yave_core
-           ├── yave_plugin ─┬─ yave_audio     (VST3 processor node のため)
-           │                └─ yave_subtitle  (ISubtitleEffect のため)
-           └── yave_core
-
-yave_sdk (INTERFACE) : 誰にも依存しない。yave_subtitle と外部プラグインが include する
+/
+├── apps/
+│   ├── web/                     Vite エントリ (ブラウザ / GitHub Pages 向け)
+│   │   ├── index.html
+│   │   ├── src/
+│   │   │   ├── main.tsx
+│   │   │   └── coi-serviceworker.ts
+│   │   ├── vite.config.ts
+│   │   └── tsconfig.json
+│   │
+│   └── electron/                Electron エントリ (デスクトップ向け)
+│       ├── main/
+│       │   ├── main.ts
+│       │   ├── window.ts
+│       │   ├── menu.ts
+│       │   └── ipc/
+│       │       ├── projectIpc.ts
+│       │       ├── assetIpc.ts
+│       │       ├── secretsIpc.ts
+│       │       └── dialogIpc.ts
+│       ├── preload/
+│       │   └── preload.ts
+│       ├── electron-builder.yml
+│       ├── vite.config.ts
+│       └── tsconfig.json
+│
+├── packages/
+│   ├── core/                    ドメイン層 (UI・DOM・Node 非依存)
+│   │   ├── src/
+│   │   │   ├── time/
+│   │   │   │   ├── Rational.ts
+│   │   │   │   └── TimeRange.ts
+│   │   │   ├── id/
+│   │   │   │   └── Uuid.ts
+│   │   │   ├── model/
+│   │   │   │   ├── Clip.ts
+│   │   │   │   ├── VideoClip.ts
+│   │   │   │   ├── AudioClip.ts
+│   │   │   │   ├── ImageClip.ts
+│   │   │   │   ├── ColorClip.ts
+│   │   │   │   ├── TitleClip.ts
+│   │   │   │   ├── SubtitleClip.ts
+│   │   │   │   ├── AiPlaceholderClip.ts
+│   │   │   │   ├── CutClip.ts             (13章 AI トラック)
+│   │   │   │   ├── Track.ts
+│   │   │   │   ├── Timeline.ts
+│   │   │   │   ├── Project.ts
+│   │   │   │   ├── StoryBible.ts
+│   │   │   │   ├── Transition.ts
+│   │   │   │   └── VideoFilter.ts
+│   │   │   ├── snapshot/
+│   │   │   │   └── RenderSnapshot.ts
+│   │   │   ├── commands/
+│   │   │   │   ├── Command.ts
+│   │   │   │   ├── CommandStack.ts
+│   │   │   │   ├── AddTrackCommand.ts
+│   │   │   │   ├── RemoveTrackCommand.ts
+│   │   │   │   ├── ReorderTrackCommand.ts
+│   │   │   │   ├── AddClipCommand.ts
+│   │   │   │   ├── MoveClipCommand.ts
+│   │   │   │   ├── TrimClipCommand.ts
+│   │   │   │   ├── SplitClipCommand.ts
+│   │   │   │   ├── RippleDeleteCommand.ts
+│   │   │   │   ├── AddFilterCommand.ts
+│   │   │   │   ├── AddTransitionCommand.ts
+│   │   │   │   ├── CutCommands.ts
+│   │   │   │   └── CommitGeneratedAssetCommand.ts
+│   │   │   └── ai/
+│   │   │       ├── AiGenerationParams.ts
+│   │   │       └── OutputBinding.ts
+│   │   ├── test/
+│   │   │   ├── rational.test.ts
+│   │   │   ├── timeline.test.ts
+│   │   │   └── commands.test.ts
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   │
+│   ├── io/                      プロジェクト保存・ファイルフォーマット
+│   │   ├── src/
+│   │   │   ├── ProjectSerializer.ts
+│   │   │   ├── SchemaMigration.ts
+│   │   │   ├── JsonKeys.ts
+│   │   │   ├── EnumMapping.ts
+│   │   │   ├── PathResolver.ts
+│   │   │   ├── srt/
+│   │   │   │   ├── SrtParser.ts
+│   │   │   │   └── SrtWriter.ts
+│   │   │   ├── vtt/
+│   │   │   │   └── VttWriter.ts
+│   │   │   └── archive/
+│   │   │       └── YavezArchive.ts       (.yavez zip 読み書き)
+│   │   ├── schema/
+│   │   │   └── project.v4.schema.json
+│   │   ├── test/
+│   │   │   ├── projectserializer.test.ts
+│   │   │   └── srtparser.test.ts
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   │
+│   ├── engine/                  メディア・描画・音声・AI 実行
+│   │   ├── src/
+│   │   │   ├── media/
+│   │   │   │   ├── demux/
+│   │   │   │   │   ├── Mp4Demuxer.ts
+│   │   │   │   │   └── WebmDemuxer.ts
+│   │   │   │   ├── workers/
+│   │   │   │   │   ├── decode.worker.ts
+│   │   │   │   │   ├── waveform.worker.ts
+│   │   │   │   │   └── thumbnail.worker.ts
+│   │   │   │   ├── FrameCache.ts
+│   │   │   │   ├── VideoDecoderPool.ts
+│   │   │   │   ├── AudioDecoderPool.ts
+│   │   │   │   ├── ProxyGenerator.ts     (ffmpeg.wasm)
+│   │   │   │   └── export/
+│   │   │   │       ├── ExportJob.ts
+│   │   │   │       └── MuxerBridge.ts
+│   │   │   ├── render/
+│   │   │   │   ├── WebGlCompositor.ts
+│   │   │   │   ├── TexturePool.ts
+│   │   │   │   ├── FboPool.ts
+│   │   │   │   ├── LayerPass.ts
+│   │   │   │   ├── FilterPass.ts
+│   │   │   │   ├── TransitionPass.ts
+│   │   │   │   └── shaders/
+│   │   │   │       ├── fullscreen.vert.glsl
+│   │   │   │       ├── layer_blend.frag.glsl
+│   │   │   │       ├── filter_color.frag.glsl
+│   │   │   │       ├── filter_blur.frag.glsl
+│   │   │   │       └── transition.frag.glsl
+│   │   │   ├── audio/
+│   │   │   │   ├── AudioEngine.ts
+│   │   │   │   ├── AudioClock.ts
+│   │   │   │   ├── DelayCompensator.ts
+│   │   │   │   ├── worklets/
+│   │   │   │   │   └── mixer.worklet.ts
+│   │   │   │   └── MeterBridge.ts
+│   │   │   └── ai/
+│   │   │       ├── AiOrchestrator.ts
+│   │   │       ├── GenerationCache.ts
+│   │   │       ├── workers/
+│   │   │       │   └── onnx.worker.ts
+│   │   │       └── providers/
+│   │   │           ├── OnnxWebProvider.ts
+│   │   │           ├── RemoteHttpProvider.ts
+│   │   │           └── SidecarProvider.ts (Electron only)
+│   │   ├── test/
+│   │   │   ├── delaycompensator.test.ts
+│   │   │   └── audiograph.test.ts
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   │
+│   ├── platform/                PlatformHost 定義とアダプタ
+│   │   ├── src/
+│   │   │   ├── PlatformHost.ts
+│   │   │   ├── web/
+│   │   │   │   ├── WebPlatformHost.ts
+│   │   │   │   ├── FileSystemAccessAdapter.ts
+│   │   │   │   └── OpfsStorage.ts
+│   │   │   └── electron-renderer/
+│   │   │       ├── ElectronPlatformHost.ts
+│   │   │       └── IpcClient.ts
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   │
+│   ├── plugin-sdk/              サードパーティ向け JS プラグイン公開 API
+│   │   ├── src/
+│   │   │   ├── index.ts
+│   │   │   ├── manifest.ts
+│   │   │   ├── subtitleEffect.ts
+│   │   │   ├── videoFilter.ts
+│   │   │   └── parameterSchema.ts
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   │
+│   └── ui/                      React UI コンポーネント群
+│       ├── src/
+│       │   ├── App.tsx
+│       │   ├── layout/
+│       │   │   └── FlexLayoutShell.tsx
+│       │   ├── panels/
+│       │   │   ├── MediaLibraryPanel.tsx
+│       │   │   ├── FileBrowserPanel.tsx
+│       │   │   ├── ConsolePanel.tsx
+│       │   │   ├── InspectorPanel.tsx
+│       │   │   ├── EffectLibraryPanel.tsx
+│       │   │   ├── TimelinePanel.tsx
+│       │   │   ├── AiTaskListPanel.tsx
+│       │   │   └── StoryboardBoardPanel.tsx
+│       │   ├── timeline/
+│       │   │   ├── TimelineView.tsx
+│       │   │   ├── TrackHeader.tsx
+│       │   │   ├── ClipItem.tsx
+│       │   │   └── PlayheadRuler.tsx
+│       │   ├── inspector/
+│       │   │   ├── ClipInspector.tsx
+│       │   │   ├── SubtitleInspector.tsx
+│       │   │   └── AutoParameterForm.tsx
+│       │   ├── preview/
+│       │   │   └── PreviewCanvas.tsx
+│       │   ├── stores/
+│       │   │   ├── useProjectStore.ts
+│       │   │   ├── usePlaybackStore.ts
+│       │   │   └── useSelectionStore.ts
+│       │   └── i18n/
+│       │       └── index.ts
+│       ├── tsconfig.json
+│       └── package.json
+│
+├── locales/                     i18n 辞書 (JSON)
+│   ├── ja.json
+│   └── en.json
+│
+├── examples/plugins/            JS プラグインのサンプル
+│   └── glitch-effect/
+│       ├── yave-plugin.json
+│       └── index.ts
+│
+├── tests/                       結合・E2E テスト
+│   ├── e2e/
+│   │   ├── web.spec.ts          (Playwright - Chromium)
+│   │   └── electron.spec.ts     (Playwright - Electron launch)
+│   └── fixtures/
+│       ├── sample.srt
+│       ├── lyrics.srt
+│       └── sample_project.yave
+│
+├── doc/                         本設計書
+├── .github/workflows/
+│   ├── ci.yml
+│   ├── pages.yml
+│   └── release-electron.yml
+│
+├── package.json
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+└── eslint.config.js
 ```
 
-- `yave_core` は **FFmpeg / QRhi / ONNX に一切依存しない**。これによりコアのユニットテストが
-  GPU もコーデックも無い CI 上で走る。
-- `yave_plugin` が `yave_audio` と `yave_subtitle` の両方に依存するのは、プラグインが
-  音声処理ノードにも字幕エフェクトにもなり得るため。逆方向の依存は作らない
-  (`yave_subtitle` は `ISubtitleEffect` インタフェースだけを知っていて、
-  それを誰がロードするかは知らない)。
-- **AI の純データ型は `yave_core` に置く** (`src/core/ai/AiGenerationParams.h`)。
-  `AiPlaceholderClip` と `CutClip` はどちらも `src/core/` にありながら
-  `AiGenerationParams` を保持するため、これを `yave_ai` に置いたままでは
-  `yave_core -> yave_ai` の逆依存が生じる。
-  純データ型は `TimeRange` / `Rational` / Qt Core にしか依存しないので、
-  移しても「GPU 無し CI で走る」性質は失われない。
-  `yave_ai` にはオーケストレータ / プロバイダ / キャッシュ / タスク /
-  バッチ / プランナが残る。経緯は [13.14.3](13-ai-track.md)。
+---
+
+## 2.2 モジュール依存関係表
+
+矢印は「行が列を import してよいか」を示す。循環参照は全面的に禁止する。
+
+| パッケージ | `core` | `io` | `engine` | `platform` | `plugin-sdk` | `ui` |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| `core` | — | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `io` | **✓** | — | ✗ | ✗ | ✗ | ✗ |
+| `engine` | **✓** | **✓** | — | **✓** | **✓** | ✗ |
+| `platform` | **✓** (型のみ) | ✗ | ✗ | — | ✗ | ✗ |
+| `plugin-sdk` | ✗ | ✗ | ✗ | ✗ | — | ✗ |
+| `ui` | **✓** | **✓** | **✓** | **✓** | **✓** | — |
+| `apps/web` | **✓** | **✓** | **✓** | **✓** | **✓** | **✓** |
+| `apps/electron` | **✓** | **✓** | **✓** | **✓** | **✓** | **✓** |
+
+- **`packages/core` の独立性**:
+  `packages/core` は何者にも依存しない。ブラウザの DOM API、React、Node.js 組み込みモジュール (`fs`, `path` 等) の import は ESLint ルールで弾く。これにより、純粋な単体テストがヘッドレス環境でミリ秒単位で高速実行できる。
+- **`packages/plugin-sdk` の独立性**:
+  サードパーティプラグイン作者が npm 等から単体で導入できるよう、リポジトリ内の他パッケージに依存しないプレーンな型定義ライブラリとする。
+- **`packages/platform` の境界性**:
+  `packages/platform` は `PlatformHost` インタフェースおよび各ホスト実装を持つが、UI コンポーネントやレンダリングエンジンには依存しない。
+
+---
 
 ## 2.3 命名規約
 
 | 対象 | 規約 | 例 |
 |---|---|---|
-| クラス / 構造体 | UpperCamelCase | `SubtitleClip` |
-| メンバ関数 | lowerCamelCase | `insertClip()` |
-| メンバ変数 | lowerCamelCase + 末尾 `_` | `tracks_` |
-| ローカル変数 / 引数 | lowerCamelCase | `frameIndex` |
-| 定数 / enum 値 | UpperCamelCase | `BlendMode::Multiply` |
-| ネームスペース | 小文字 | `yave::subtitle` |
-| ファイル名 | クラス名と一致 | `SubtitleClip.h` |
-| JSON キー | lowerCamelCase | `"effectStack"` |
+| ファイル名 (クラス / 型定義) | PascalCase.ts | `VideoClip.ts`, `ProjectSerializer.ts` |
+| ファイル名 (React コンポーネント) | PascalCase.tsx | `TimelinePanel.tsx`, `InspectorPanel.tsx` |
+| ファイル名 (React Hook) | camelCase (`use` 接頭辞) | `useProjectStore.ts`, `useLanguage.ts` |
+| ファイル名 (Web Worker) | `*.worker.ts` | `decode.worker.ts`, `waveform.worker.ts` |
+| ファイル名 (AudioWorklet) | `*.worklet.ts` | `mixer.worklet.ts` |
+| ファイル名 (シェーダ) | `*.glsl` (`.vert.glsl`, `.frag.glsl`) | `layer_blend.frag.glsl` |
+| クラス名 / インタフェース / 型名 | PascalCase | `SubtitleClip`, `CommandStack`, `Rational` |
+| 関数 / メソッド | lowerCamelCase | `insertClip()`, `secondsToFrames()` |
+| プロパティ / 変数 | lowerCamelCase | `frameIndex`, `trackCount` |
+| 定数 | UPPER_SNAKE_CASE | `MAX_GPU_FRAMES`, `DEFAULT_FPS` |
+| JSON キー | lowerCamelCase | `"effectStack"`, `"storyBible"` |
+| i18n 翻訳キー | ドット区切り lowerCamelCase | `common.ok`, `timeline.addTrack` |
 
-ネームスペースは以下:
+> **`cut` という名前のメソッドの禁止 (継承ルール)**:
+> タイムライン操作やクリップボード操作において、単語 `cut` をメソッド名に用いない (`copySelection`, `removeSelection` 等とする)。AI トラックの「カット」(`CutClip`) との混同を防ぐため。
 
-```cpp
-namespace yave           { }   // core
-namespace yave::media    { }
-namespace yave::render   { }
-namespace yave::audio    { }
-namespace yave::subtitle { }
-namespace yave::ai       { }
-namespace yave::plugin   { }
-namespace yave::io       { }
-namespace yave::sdk      { }   // 外部プラグイン作者に公開する範囲
-```
-
-> **`Debug` という名前のネームスペース / クラスは作らない。**
-> Qt の `qDebug` や Windows SDK のマクロと衝突しやすい。診断系は `yave::diag` とする。
+---
 
 ## 2.4 生成物の配置
 
+ビルド成果物はすべてリポジトリルートの `.gitignore` で追跡対象外とする。
+
 ```
-build/
-├── bin/                     実行ファイル・DLL
-│   ├── yave.exe / yave.app
-│   ├── shaders/*.qsb        (qrc に埋め込むので実行時には不要。デバッグ用)
-│   └── plugins/             ビルドした字幕エフェクトサンプル
-└── ...
-
-実行時のユーザーデータ:
-Windows: %APPDATA%/YAVE/
-macOS:   ~/Library/Application Support/YAVE/
-├── settings.ini             QSettings
-├── plugin_cache.json        プラグイン走査結果のキャッシュ
-├── models/                  ダウンロード済み ONNX モデル
-└── logs/
-
-プロジェクト固有:
-<project_dir>/
-├── MyProject.yave           JSON プロジェクトファイル
-├── assets/                  収集したメディア(任意)
-└── .yave_cache/             再生成可能なデータのみ。VCS 管理外にすること
-    ├── gen/<task-uuid>/     AI 生成物
-    ├── proxy/               プロキシ(低解像度)メディア
-    ├── waveform/            波形サムネイル
-    └── thumbs/              クリップサムネイル
+/
+├── apps/web/dist/               GitHub Pages デプロイ用の静的ファイル群 (HTML, JS, CSS, WASM)
+├── apps/electron/dist/          Electron レンダラービルド成果物
+├── apps/electron/release/       electron-builder が出力するインストーラ (exe, dmg, deb)
+└── coverage/                    テストカバレッジレポート
 ```
 
-> `.yave_cache/` は削除しても編集内容が失われないことを保証する。
-> AI 生成物もここに置くが、プロジェクト JSON には**生成パラメータが完全に保存されている**ため
-> 再生成できる。ただし乱数シードを固定していない生成は同一結果にならないので、
-> 保存時に「生成物をプロジェクトへ収集する」オプションを提供する ([7章](07-ai-orchestrator.md) 参照)。
+### 2.4.1 実行時ユーザーデータ配置
+
+| 環境 | ディレクトリ | 用途 |
+|---|---|---|
+| Web (ブラウザ) | OPFS (`/yave/`) | 一時デコードフレーム、プロキシ動画、波形キャッシュ |
+| Web (ブラウザ) | IndexedDB (`yave_store`) | プロジェクト自動保存、UI 設定、シークレット |
+| Electron | `app.getPath('userData')` | 設定 JSON (`settings.json`)、キャッシュ (`cache/`)、プラグイン (`plugins/`) |

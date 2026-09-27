@@ -1,72 +1,84 @@
 # YAVE (Yet Another Video Editor)
 
-C++17 / Qt 6 / FFmpeg ベースのクロスプラットフォーム動画編集アプリケーション。
-詳細設計は `doc/design.md` および `doc/design/` 配下を参照。
+TypeScript + React 製のハイエンド動画編集アプリケーション。同一コードベースからブラウザ版 (GitHub Pages 上での静的配信) とデスクトップ版 (Electron) の両方を提供します。
 
-## モジュール構成
+> **開発状況**:
+> 現在は新アーキテクチャの設計段階です。実装は [移行マイルストーン (doc/design/14-migration.md)](doc/design/14-migration.md#144-移行マイルストーン) に従って順次進められます。
+> 以前の C++17 / Qt 6 実装は `legacy-qt` タグ (`git checkout legacy-qt`) を参照してください。
 
-| ターゲット | 内容 |
+---
+
+## 🌐 公開 URL (予定)
+
+- **Web 版 (GitHub Pages)**: [https://gadget114514.github.io/YetAnotherVideoEditor/](https://gadget114514.github.io/YetAnotherVideoEditor/)
+
+---
+
+## 📖 詳細設計書
+
+全体の詳細設計は `doc/design.md` および `doc/design/` 配下に完全文書化されています。
+
+| 章 | 設計ドキュメント |
 |---|---|
-| `yave_core` | Rational / TimeRange / Clip / Track / Timeline / Project / Undo コマンド |
-| `yave_subtitle` | 字幕クリップ / スタイル / SRT・VTT 入出力 / 組み込みエフェクト |
-| `yave_io` | プロジェクト JSON シリアライズ (schemaVersion 管理あり) |
-| `yave_audio` | AudioClock / ロックフリーリングバッファ / PDC / WASAPI デバイス |
-| `yave_ai` | 生成パラメータ / タスク / オーケストレータ / プロバイダ |
-| `yave_media` | FFmpeg デコード / エンコード / フレームキャッシュ (オプション) |
-| `yave_render` | QRhi 合成パイプライン / テクスチャプール / シェーダ |
-| `yave_plugin` | 字幕エフェクトレジストリ / VST3 (オプション) / AviUtl (Windows のみ) |
-| `yave_app` | QML UI とエントリポイント |
+| 目次 | [全体方針 & 目次](doc/design.md) |
+| 1 | [全体アーキテクチャ設計](doc/design/01-architecture.md) |
+| 2 | [ディレクトリ構成](doc/design/02-directory-layout.md) |
+| 3 | [タイムライン & レンダリングエンジン](doc/design/03-timeline-render.md) |
+| 4 | [ビデオエンジン (WebCodecs + GPU)](doc/design/04-video-engine.md) |
+| 5 | [オーディオエンジン](doc/design/05-audio-engine.md) |
+| 6 | [字幕エンジン](doc/design/06-subtitle-engine.md) |
+| 7 | [マルチモーダル生成AIエンジン](doc/design/07-ai-orchestrator.md) |
+| 8 | [プラグインシステム](doc/design/08-plugin-host.md) |
+| 9 | [プロジェクト保存 (JSON)](doc/design/09-project-io.md) |
+| 10 | [国際化 (日英切替)](doc/design/10-i18n.md) |
+| 11 | [型定義リファレンス](doc/design/11-type-reference.md) |
+| 12 | [ビルド・デプロイ設計](doc/design/12-build-deploy.md) |
+| 13 | [AIトラック (演出指示 / 絵コンテ)](doc/design/13-ai-track.md) |
+| 14 | [移行ガイド & テスト対応表](doc/design/14-migration.md) |
 
-## ビルド (Windows, Qt MinGW キット同梱環境)
+---
 
-```bash
-cmake --preset win-mingw
-cmake --build --preset win-mingw
+## 🏗 ディレクトリ構成 (予定)
+
+```
+/
+├── apps/
+│   ├── web/          Vite SPA エントリ (GitHub Pages 向け)
+│   └── electron/     Electron main / preload (デスクトップ向け)
+├── packages/
+│   ├── core/         純粋なドメインロジック (Rational, Timeline, Commands)
+│   ├── io/           プロジェクト JSON / SRT / VTT 入出力
+│   ├── engine/       WebCodecs, WebGL2, AudioWorklet, AI 実行
+│   ├── platform/     PlatformHost アダプタ (Web / Electron)
+│   ├── plugin-sdk/   サードパーティ向け JS プラグイン公開 API
+│   └── ui/           React コンポーネント, flexlayout-react 8 パネル
+├── locales/          多言語辞書 (ja.json, en.json)
+└── tests/            Playwright E2E テスト & フィクスチャ
 ```
 
-Qt を別の場所にインストールしている場合は `CMakePresets.json` の
-`CMAKE_PREFIX_PATH` を調整するか、直接指定する:
+---
+
+## 🛠 予定コマンド
 
 ```bash
-cmake -B build -G Ninja \
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/mingw_64 \
-  -DCMAKE_C_COMPILER=C:/Qt/Tools/mingw1310_64/bin/gcc.exe \
-  -DCMAKE_CXX_COMPILER=C:/Qt/Tools/mingw1310_64/bin/g++.exe
-cmake --build build
+# 依存関係のインストール
+pnpm install
+
+# ブラウザ版の開発サーバー起動
+pnpm dev:web
+
+# Electron 版の開発起動
+pnpm dev:electron
+
+# 単体テスト実行 (Vitest)
+pnpm test
+
+# E2E テスト実行 (Playwright)
+pnpm test:e2e
 ```
 
-### FFmpeg
+---
 
-FFmpeg 開発ライブラリ (ヘッダ + インポートライブラリ) がある場合は
-`-DFFMPEG_ROOT=<prefix>` を渡すと `yave_media` が実装込みでビルドされる。
-無い場合は自動的にスタブモードになり、デコード/エンコードが「未対応」と
-報告するだけで、他の機能とテストはすべて動作する。
-
-macOS: `brew install ffmpeg`
-Windows: vcpkg (`vcpkg.json` 同梱) または gyan.dev の dev パッケージ
-
-### オプション一覧
-
-| オプション | 既定 | 説明 |
-|---|---|---|
-| `YAVE_ENABLE_FFMPEG` | ON | 見つからなければ自動 OFF |
-| `YAVE_ENABLE_AVIUTL` | Win: SDK 同梱時 ON | AviUtl x64 ホスト |
-| `YAVE_ENABLE_VST3` | OFF | VST3 SDK を FetchContent |
-| `YAVE_ENABLE_ONNX_LOCAL` | OFF | ローカル ONNX 推論 |
-| `YAVE_BUILD_TESTS` | ON | Qt Test 単体テスト |
-
-## テスト
-
-```bash
-ctest --preset win-mingw --output-on-failure
-```
-
-- `tst_rational`: 有理数演算・比較の境界値 (60000/1001 系タイムベース)
-- `tst_timeline`: トラック不変条件・分割・リップル削除・Undo/Redo
-- `tst_srtparser`: SRT パース (UTF-8 / Shift_JIS フォールバック) と書き出し往復
-- `tst_projectserializer`: JSON 往復・未知フィールド保持・原子的保存
-- `tst_delaycompensator`: PDC 計算と DelayLine
-
-## ライセンス
+## 📄 ライセンス
 
 TBD
