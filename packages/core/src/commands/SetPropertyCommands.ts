@@ -27,9 +27,9 @@ export class SetClipPropertyCommand implements Command {
   private old_: any;
   private new_: any;
 
-  constructor(project: Project, clipId: Uuid, prop: ClipProperty, value: any) {
+  constructor(project: Project, clipId: Uuid | string, prop: ClipProperty, value: any) {
     this.project_ = project;
-    this.clipId_ = clipId;
+    this.clipId_ = clipId as Uuid;
     this.prop_ = prop;
     this.new_ = value;
 
@@ -151,9 +151,9 @@ export class SetTrackPropertyCommand implements Command {
   private old_: any;
   private new_: any;
 
-  constructor(project: Project, trackId: Uuid, prop: TrackProperty, value: any) {
+  constructor(project: Project, trackId: Uuid | string, prop: TrackProperty, value: any) {
     this.project_ = project;
-    this.trackId_ = trackId;
+    this.trackId_ = trackId as Uuid;
     this.prop_ = prop;
     this.new_ = value;
 

@@ -11,12 +11,23 @@ export class AddTrackCommand implements Command {
   private name_: string;
   private track_: Track | null = null;
 
-  constructor(project: Project, type: TrackType, index: number, name?: string) {
+  constructor(project: Project, type: TrackType, indexOrName?: number | string, name?: string) {
     this.project_ = project;
     this.type_ = type;
-    this.index_ = index;
-    const ordinal = project.timeline.tracksOfType(type).length + 1;
-    this.name_ = name && name.length > 0 ? name : Timeline.defaultTrackName(type, ordinal);
+    if (typeof indexOrName === 'number') {
+      this.index_ = indexOrName;
+      const ordinal = project.timeline.tracksOfType(type).length + 1;
+      this.name_ = name && name.length > 0 ? name : Timeline.defaultTrackName(type, ordinal);
+    } else {
+      this.index_ = project.timeline.trackCount;
+      const trackName = typeof indexOrName === 'string' ? indexOrName : name;
+      const ordinal = project.timeline.tracksOfType(type).length + 1;
+      this.name_ = trackName && trackName.length > 0 ? trackName : Timeline.defaultTrackName(type, ordinal);
+    }
+  }
+
+  get createdTrack(): Track | null {
+    return this.track_;
   }
 
   redo(): void {

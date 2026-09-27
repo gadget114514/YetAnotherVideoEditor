@@ -50,11 +50,11 @@ export class Timeline {
     return this.tracks_[index] ?? null;
   }
 
-  trackById(id: Uuid): Track | null {
+  trackById(id: Uuid | string): Track | null {
     return this.tracks_.find((t) => t.id === id) ?? null;
   }
 
-  indexOfTrack(trackOrId: Track | Uuid): number {
+  indexOfTrack(trackOrId: Track | Uuid | string): number {
     const id = typeof trackOrId === 'string' ? trackOrId : trackOrId.id;
     return this.tracks_.findIndex((t) => t.id === id);
   }
@@ -99,7 +99,7 @@ export class Timeline {
     return this.takeTrack(index) !== null;
   }
 
-  takeTrackById(id: Uuid): Track | null {
+  takeTrackById(id: Uuid | string): Track | null {
     const idx = this.indexOfTrack(id);
     return idx !== -1 ? this.takeTrack(idx) : null;
   }
@@ -121,7 +121,7 @@ export class Timeline {
     }
   }
 
-  findClip(clipId: Uuid, onTrack?: (track: Track) => void): Clip | null {
+  findClip(clipId: Uuid | string, onTrack?: (track: Track) => void): Clip | null {
     for (const t of this.tracks_) {
       const c = t.clipById(clipId);
       if (c) {
@@ -132,7 +132,7 @@ export class Timeline {
     return null;
   }
 
-  findClipWithTrack(clipId: Uuid): { clip: Clip; track: Track } | null {
+  findClipWithTrack(clipId: Uuid | string): { clip: Clip; track: Track } | null {
     for (const t of this.tracks_) {
       const c = t.clipById(clipId);
       if (c) {

@@ -14,15 +14,41 @@ export class SplitClipCommand implements Command {
   private left_: Clip | null = null;
   private right_: Clip | null = null;
 
-  constructor(project: Project, trackId: Uuid, clipId: Uuid, splitFrame: number) {
+  constructor(project: Project, trackIdOrClipId: Uuid | string, clipIdOrFrame: Uuid | string | number, splitFrame?: number) {
     this.project_ = project;
-    this.trackId_ = trackId;
-    this.clipId_ = clipId;
-    this.splitFrame_ = splitFrame;
+    if (typeof clipIdOrFrame === 'number') {
+      this.clipId_ = trackIdOrClipId as Uuid;
+      this.splitFrame_ = clipIdOrFrame;
+      const found = project.timeline.findClipWithTrack(this.clipId_);
+      this.trackId_ = found ? found.track.id : ('' as Uuid);
+    } else {
+      this.trackId_ = trackIdOrClipId as Uuid;
+      this.clipId_ = clipIdOrFrame as Uuid;
+      this.splitFrame_ = splitFrame!;
+    }
+  }
+
+  get wasSplit(): boolean {
+    return this.left_ !== null && this.right_ !== null;
+  }
+
+  get left(): Clip | null {
+    return this.left_;
+  }
+
+  get right(): Clip | null {
+    return this.right_;
   }
 
   redo(): void {
-    const t = this.project_.timeline.trackById(this.trackId_);
+    let t = this.project_.timeline.trackById(this.trackId_);
+    if (!t) {
+      const found = this.project_.timeline.findClipWithTrack(this.clipId_);
+      if (found) {
+        t = found.track;
+        this.trackId_ = t.id;
+      }
+    }
     if (!t) return;
 
     const original = t.takeClip(this.clipId_);

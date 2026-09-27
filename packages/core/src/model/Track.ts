@@ -171,7 +171,7 @@ export class Track {
     return true;
   }
 
-  takeClip(clipId: Uuid): Clip | null {
+  takeClip(clipId: Uuid | string): Clip | null {
     const idx = this.clips_.findIndex((c) => c.id === clipId);
     if (idx !== -1) {
       const [removed] = this.clips_.splice(idx, 1);
@@ -181,7 +181,7 @@ export class Track {
     return null;
   }
 
-  removeClip(clipId: Uuid): boolean {
+  removeClip(clipId: Uuid | string): boolean {
     return this.takeClip(clipId) !== null;
   }
 
@@ -245,7 +245,7 @@ export class Track {
     return null;
   }
 
-  clipById(id: Uuid): Clip | null {
+  clipById(id: Uuid | string): Clip | null {
     return this.clips_.find((c) => c.id === id) ?? null;
   }
 

@@ -12,14 +12,23 @@ export class AddClipCommand implements Command {
   private inserted_: boolean = false;
   private rejectReason_: string = '';
 
-  constructor(project: Project, trackId: Uuid, trackIndex: number, clip: Clip) {
+  constructor(project: Project, trackId: Uuid | string, trackIndexOrClip: number | Clip, clip?: Clip) {
     this.project_ = project;
-    this.trackId_ = trackId;
-    this.trackIndex_ = trackIndex;
-    this.clip_ = clip;
+    this.trackId_ = trackId as Uuid;
+    if (typeof trackIndexOrClip === 'number') {
+      this.trackIndex_ = trackIndexOrClip;
+      this.clip_ = clip!;
+    } else {
+      this.trackIndex_ = -1;
+      this.clip_ = trackIndexOrClip;
+    }
   }
 
   get wasInserted(): boolean {
+    return this.inserted_;
+  }
+
+  get wasAdded(): boolean {
     return this.inserted_;
   }
 
@@ -66,14 +75,35 @@ export class RemoveClipCommand implements Command {
   private clipId_: Uuid;
   private removedClip_: Clip | null = null;
 
-  constructor(project: Project, trackId: Uuid, clipId: Uuid) {
+  constructor(project: Project, trackIdOrClipId: Uuid | string, clipId?: Uuid | string) {
     this.project_ = project;
-    this.trackId_ = trackId;
-    this.clipId_ = clipId;
+    if (clipId !== undefined) {
+      this.trackId_ = trackIdOrClipId as Uuid;
+      this.clipId_ = clipId as Uuid;
+    } else {
+      this.clipId_ = trackIdOrClipId as Uuid;
+      const found = project.timeline.findClipWithTrack(this.clipId_);
+      this.trackId_ = found ? found.track.id : ('' as Uuid);
+    }
+  }
+
+  get wasRemoved(): boolean {
+    return this.removedClip_ !== null;
+  }
+
+  get removedClip(): Clip | null {
+    return this.removedClip_;
   }
 
   redo(): void {
-    const t = this.project_.timeline.trackById(this.trackId_);
+    let t = this.project_.timeline.trackById(this.trackId_);
+    if (!t) {
+      const found = this.project_.timeline.findClipWithTrack(this.clipId_);
+      if (found) {
+        t = found.track;
+        this.trackId_ = t.id;
+      }
+    }
     if (t) {
       this.removedClip_ = t.takeClip(this.clipId_);
     }
