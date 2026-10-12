@@ -93,6 +93,9 @@ importers:
       '@yave/platform':
         specifier: workspace:*
         version: link:../platform
+      '@yave/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       mp4-muxer:
         specifier: ^5.2.2
         version: 5.2.2
