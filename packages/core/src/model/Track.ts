@@ -141,7 +141,7 @@ export class Track {
       case 'audio':
         return clip.type === 'audio' || clip.type === 'aiPlaceholder';
       case 'subtitle':
-        return clip.type === 'subtitle' || clip.type === 'title';
+        return clip.type === 'subtitle' || clip.type === 'title' || clip.type === 'aiPlaceholder';
       case 'aiGenerated':
         return true;
       default:

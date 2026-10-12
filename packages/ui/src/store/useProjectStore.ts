@@ -17,8 +17,10 @@ import {
   RemoveClipCommand,
   SplitClipCommand,
   Timebase,
+  ImportAudioAndSubtitleCommand,
 } from '@yave/core';
 import { ProjectSerializer, type LoadResult, type SaveOptions } from '@yave/io';
+import { AiOrchestrator } from '@yave/engine';
 
 export interface ProjectState {
   project: Project;
@@ -45,6 +47,25 @@ export interface ProjectState {
   setClipProperty: (clipId: string, prop: ClipProperty, value: any) => void;
   setTrackProperty: (trackId: string, prop: TrackProperty, value: any) => void;
   touch: () => void;
+
+  // AI & Media Transcription
+  aiOrchestrator: AiOrchestrator;
+  importAudioWithSubtitles: (
+    file: File | { name: string; buffer?: ArrayBuffer | Uint8Array; durationFrames?: number },
+    options?: {
+      prompt?: string;
+      language?: string;
+      audioTrackId?: string;
+      subtitleTrackId?: string;
+      onProgress?: (progress: number) => void;
+    }
+  ) => Promise<{
+    audioClip: AudioClip;
+    subtitleClips: SubtitleClip[];
+    audioTrack: Track;
+    subtitleTrack: Track;
+    srtContent: string;
+  }>;
 }
 
 function makeInitialProject(): Project {
@@ -179,4 +200,52 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { project, executeCommand } = get();
     executeCommand(new SetTrackPropertyCommand(project, trackId, prop, value));
   },
+
+  aiOrchestrator: new AiOrchestrator(),
+
+  importAudioWithSubtitles: async (file, options = {}) => {
+    const { project, executeCommand, touch, aiOrchestrator } = get();
+
+    let buffer: ArrayBuffer | Uint8Array | undefined;
+    const fileName = file.name;
+    const durationFrames = ('durationFrames' in file && file.durationFrames) ? file.durationFrames : undefined;
+
+    if ('buffer' in file && file.buffer) {
+      buffer = file.buffer;
+    } else if (file instanceof Blob || (typeof File !== 'undefined' && file instanceof File)) {
+      buffer = await file.arrayBuffer();
+    }
+
+    const res = await aiOrchestrator.importAudioAndTranscribe({
+      project,
+      audioName: fileName,
+      audioData: buffer,
+      durationFrames,
+      audioTrackId: options.audioTrackId,
+      subtitleTrackId: options.subtitleTrackId,
+      prompt: options.prompt,
+      language: options.language,
+      onProgress: options.onProgress,
+    });
+
+    // Record in UndoStack so that Undo/Redo is supported
+    const cmd = new ImportAudioAndSubtitleCommand(
+      project,
+      res.audioTrack.id,
+      res.audioClip,
+      res.subtitleTrack.id,
+      res.subtitleClips,
+    );
+    executeCommand(cmd);
+
+    touch();
+    return {
+      audioClip: res.audioClip,
+      subtitleClips: res.subtitleClips,
+      audioTrack: res.audioTrack,
+      subtitleTrack: res.subtitleTrack,
+      srtContent: res.srtContent,
+    };
+  },
 }));
+

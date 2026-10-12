@@ -72,6 +72,44 @@ describe('UI Zustand Stores', () => {
       useProjectStore.getState().undo();
       expect(videoTrack.clipCount).toBe(countBeforeSplit);
     });
+
+    it('imports audio and transcribes subtitles via AI with undo/redo', async () => {
+      const store = useProjectStore.getState();
+      const initialAudioTrack = store.project.timeline.tracksOfType('audio')[0]!;
+      const initialSubTrack = store.project.timeline.tracksOfType('subtitle')[0]!;
+      const initialAudioCount = initialAudioTrack.clipCount;
+      const initialSubCount = initialSubTrack.clipCount;
+
+      const result = await store.importAudioWithSubtitles(
+        {
+          name: 'podcast_episode.wav',
+          durationFrames: 300,
+        },
+        {
+          prompt: 'テスト字幕です。AI音声認識が完了しました。',
+          language: 'ja',
+        }
+      );
+
+      expect(result).toBeDefined();
+      expect(result.audioClip).toBeDefined();
+      expect(result.audioClip.name).toBe('podcast_episode.wav');
+      expect(result.subtitleClips.length).toBeGreaterThanOrEqual(1);
+
+      // Timeline has the clips
+      expect(initialAudioTrack.clipCount).toBe(initialAudioCount + 1);
+      expect(initialSubTrack.clipCount).toBe(initialSubCount + result.subtitleClips.length);
+
+      // Undo removes the imported audio and subtitle clips
+      useProjectStore.getState().undo();
+      expect(initialAudioTrack.clipCount).toBe(initialAudioCount);
+      expect(initialSubTrack.clipCount).toBe(initialSubCount);
+
+      // Redo restores them
+      useProjectStore.getState().redo();
+      expect(initialAudioTrack.clipCount).toBe(initialAudioCount + 1);
+      expect(initialSubTrack.clipCount).toBe(initialSubCount + result.subtitleClips.length);
+    });
   });
 
   describe('usePlaybackStore', () => {

@@ -38,6 +38,42 @@ describe('Milestone M6: AI Orchestrator', () => {
     expect(finalClip!.type).toBe('video');
     expect(finalClip!.range.duration).toBe(120);
   });
+
+  it('loads audio, generates SRT via AI, and imports as a subtitle track', async () => {
+    const project = new Project();
+    const orchestrator = new AiOrchestrator(new MockGenerationProvider());
+
+    const result = await orchestrator.importAudioAndTranscribe({
+      project,
+      audioName: 'interview_sample.wav',
+      durationFrames: 240, // 4 seconds at 60fps
+      prompt: 'こんにちは、YAVE動画編集です。\nAI音声認識で字幕トラックを作成します。',
+      language: 'ja',
+    });
+
+    expect(result).toBeDefined();
+    expect(result.audioAssetId).toBeDefined();
+    expect(result.audioTrack).toBeDefined();
+    expect(result.audioTrack.type).toBe('audio');
+    expect(result.audioClip).toBeDefined();
+    expect(result.audioClip.name).toBe('interview_sample.wav');
+    expect(result.audioClip.range.duration).toBe(240);
+
+    // Subtitle track verification
+    expect(result.subtitleTrack).toBeDefined();
+    expect(result.subtitleTrack.type).toBe('subtitle');
+    expect(result.subtitleClips.length).toBeGreaterThanOrEqual(1);
+
+    // SRT string generated
+    expect(result.srtContent).toContain('-->');
+    expect(result.srtContent).toContain('こんにちは');
+
+    // Subtitle clips are placed on the subtitle track
+    const firstSub = result.subtitleTrack.clipAt(result.subtitleClips[0]!.range.start);
+    expect(firstSub).not.toBeNull();
+    expect(firstSub!.type).toBe('subtitle');
+    expect((firstSub as any).plainText()).toContain('こんにちは');
+  });
 });
 
 describe('Milestone M7: Plugin System', () => {

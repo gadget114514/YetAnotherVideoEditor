@@ -4,9 +4,11 @@ import {
   SubtitleClip,
   SubtitleStyleField,
   ImportSubtitleCommand,
+  ImportAudioAndSubtitleCommand,
   EditSubtitleTextCommand,
   SetSubtitleStyleCommand,
   OverlapPolicy,
+  AudioClip,
 } from '@yave/core';
 import { SrtParser, convertCuesToClips } from '../src/index.js';
 
@@ -241,4 +243,48 @@ describe('TestSubtitleCommands', () => {
     sc = findSubtitle(project, 'undo');
     expect(sc!.styleOverride.fontFamily).toBeUndefined();
   });
+
+  it('ImportAudioAndSubtitleCommand supports redo and undo', () => {
+    const project = new Project();
+    const aTrack = project.timeline.appendTrack('audio');
+    const sTrack = project.timeline.appendTrack('subtitle');
+
+    const audioClip = new AudioClip();
+    audioClip.setRange({ start: 0, duration: 180 });
+    audioClip.setName('narration.wav');
+
+    const subClip1 = new SubtitleClip();
+    subClip1.setRange({ start: 10, duration: 60 });
+    subClip1.setPlainText('Hello AI');
+
+    const subClip2 = new SubtitleClip();
+    subClip2.setRange({ start: 80, duration: 70 });
+    subClip2.setPlainText('World Subtitle');
+
+    const cmd = new ImportAudioAndSubtitleCommand(
+      project,
+      aTrack.id,
+      audioClip,
+      sTrack.id,
+      [subClip1, subClip2],
+    );
+
+    project.undoStack.push(cmd);
+
+    expect(aTrack.clipCount).toBe(1);
+    expect(sTrack.clipCount).toBe(2);
+    expect(aTrack.clipAt(0)?.name).toBe('narration.wav');
+    expect(sTrack.clipAt(10)).toBeDefined();
+
+    // Undo removes clips
+    project.undoStack.undo();
+    expect(aTrack.clipCount).toBe(0);
+    expect(sTrack.clipCount).toBe(0);
+
+    // Redo restores clips
+    project.undoStack.redo();
+    expect(aTrack.clipCount).toBe(1);
+    expect(sTrack.clipCount).toBe(2);
+  });
 });
+

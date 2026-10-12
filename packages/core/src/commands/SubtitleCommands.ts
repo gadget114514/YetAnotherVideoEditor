@@ -326,3 +326,81 @@ export class SetSubtitleStyleCommand implements Command {
     this.apply(this.old_);
   }
 }
+
+export class ImportAudioAndSubtitleCommand implements Command {
+  readonly name = 'ImportAudioAndSubtitle';
+  private project_: Project;
+  private audioTrackId_: Uuid;
+  private audioClip_: Clip;
+  private subtitleTrackId_: Uuid;
+  private subtitleClips_: Clip[];
+  private createdAudioTrackIndex_: number = -1;
+  private createdSubtitleTrackIndex_: number = -1;
+
+  constructor(
+    project: Project,
+    audioTrackId: Uuid,
+    audioClip: Clip,
+    subtitleTrackId: Uuid,
+    subtitleClips: Clip[],
+    createdAudioTrackIndex: number = -1,
+    createdSubtitleTrackIndex: number = -1,
+  ) {
+    this.project_ = project;
+    this.audioTrackId_ = audioTrackId;
+    this.audioClip_ = audioClip;
+    this.subtitleTrackId_ = subtitleTrackId;
+    this.subtitleClips_ = [...subtitleClips];
+    this.createdAudioTrackIndex_ = createdAudioTrackIndex;
+    this.createdSubtitleTrackIndex_ = createdSubtitleTrackIndex;
+  }
+
+  get audioClip(): Clip {
+    return this.audioClip_;
+  }
+
+  get subtitleClips(): readonly Clip[] {
+    return this.subtitleClips_;
+  }
+
+  redo(): void {
+    const tl = this.project_.timeline;
+    const audioTrack = tl.trackById(this.audioTrackId_);
+    if (audioTrack && !audioTrack.clipById(this.audioClip_.id)) {
+      audioTrack.insertClip(this.audioClip_);
+    }
+
+    const subTrack = tl.trackById(this.subtitleTrackId_);
+    if (subTrack) {
+      for (const sc of this.subtitleClips_) {
+        if (!subTrack.clipById(sc.id)) {
+          subTrack.insertClip(sc);
+        }
+      }
+    }
+  }
+
+  undo(): void {
+    const tl = this.project_.timeline;
+    const subTrack = tl.trackById(this.subtitleTrackId_);
+    if (subTrack) {
+      for (const sc of this.subtitleClips_) {
+        subTrack.removeClip(sc.id);
+      }
+      if (this.createdSubtitleTrackIndex_ !== -1 && subTrack.clipCount === 0) {
+        const idx = tl.indexOfTrack(subTrack);
+        if (idx !== -1) tl.removeTrack(idx);
+      }
+    }
+
+    const audioTrack = tl.trackById(this.audioTrackId_);
+    if (audioTrack) {
+      audioTrack.removeClip(this.audioClip_.id);
+      if (this.createdAudioTrackIndex_ !== -1 && audioTrack.clipCount === 0) {
+        const idx = tl.indexOfTrack(audioTrack);
+        if (idx !== -1) tl.removeTrack(idx);
+      }
+    }
+  }
+}
+

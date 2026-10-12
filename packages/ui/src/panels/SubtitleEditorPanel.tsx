@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useProjectStore } from '../store/useProjectStore.js';
 import { usePlaybackStore } from '../store/usePlaybackStore.js';
 import {
@@ -9,12 +9,15 @@ import {
   framesToSeconds,
 } from '@yave/core';
 import { SrtParser, SrtWriter, convertCuesToClips } from '@yave/io';
-import { FileText, Download, Upload, Plus, Trash2 } from 'lucide-react';
+import { FileText, Download, Upload, Plus, Trash2, Sparkles, Loader2 } from 'lucide-react';
 
 export const SubtitleEditorPanel: React.FC = () => {
-  const { project, executeCommand, touch } = useProjectStore();
+  const { project, executeCommand, importAudioWithSubtitles, touch } = useProjectStore();
   const { currentFrame, fps, seek } = usePlaybackStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioFileInputRef = useRef<HTMLInputElement>(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   const subTracks = project.timeline.tracksOfType('subtitle');
   const primaryTrack = subTracks[0];
@@ -88,6 +91,27 @@ export const SubtitleEditorPanel: React.FC = () => {
     return `${pad(m)}:${pad(sec)}.${pad(ms)}`;
   };
 
+  const handleAudioTranscription = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsTranscribing(true);
+    setStatusMsg(`Transcribing "${file.name}" with AI...`);
+    try {
+      await importAudioWithSubtitles(file);
+      setStatusMsg(`Subtitles created for "${file.name}"!`);
+      setTimeout(() => setStatusMsg(null), 3000);
+    } catch (err: any) {
+      alert(`AI STT failed: ${err?.message || 'Unknown error'}`);
+      setStatusMsg(null);
+    } finally {
+      setIsTranscribing(false);
+      if (audioFileInputRef.current) {
+        audioFileInputRef.current.value = '';
+      }
+    }
+  };
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#18181b', color: '#e4e4e7', fontSize: '12px' }}>
       {/* Action Header */}
@@ -98,6 +122,27 @@ export const SubtitleEditorPanel: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button
+            onClick={() => audioFileInputRef.current?.click()}
+            disabled={isTranscribing}
+            title="Load audio file & generate AI subtitles (音声からAI字幕生成)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 8px',
+              backgroundColor: '#9333ea',
+              border: 'none',
+              borderRadius: '4px',
+              color: '#fff',
+              cursor: isTranscribing ? 'wait' : 'pointer',
+              fontWeight: 600,
+              fontSize: '11px',
+            }}
+          >
+            {isTranscribing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            <span>AI STT</span>
+          </button>
           <button
             onClick={handleAddAtPlayhead}
             title="Add Subtitle at Playhead"
@@ -163,8 +208,23 @@ export const SubtitleEditorPanel: React.FC = () => {
             style={{ display: 'none' }}
             onChange={handleImportSrt}
           />
+          <input
+            ref={audioFileInputRef}
+            type="file"
+            accept="audio/*"
+            style={{ display: 'none' }}
+            onChange={handleAudioTranscription}
+          />
         </div>
       </div>
+
+      {/* Status banner */}
+      {statusMsg && (
+        <div style={{ padding: '6px 12px', backgroundColor: '#3b0764', color: '#e9d5ff', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {isTranscribing && <Loader2 size={12} className="animate-spin" />}
+          <span>{statusMsg}</span>
+        </div>
+      )}
 
       {/* Cues List */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>

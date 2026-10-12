@@ -90,9 +90,15 @@ importers:
       '@yave/core':
         specifier: workspace:*
         version: link:../core
+      '@yave/io':
+        specifier: workspace:*
+        version: link:../io
       '@yave/platform':
         specifier: workspace:*
         version: link:../platform
+      '@yave/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       mp4-muxer:
         specifier: ^5.2.2
         version: 5.2.2
