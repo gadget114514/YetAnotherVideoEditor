@@ -142,6 +142,154 @@ export interface WhisperProviderOptions {
   fetchFn?: typeof fetch;
 }
 
+export interface LocalWhisperProviderOptions {
+  pythonPath?: string;
+  whisperCmd?: string;
+  model?: string;
+  device?: string;
+  tempDir?: string;
+}
+
+export class LocalWhisperProvider implements IGenerationProvider {
+  readonly id = 'local-whisper';
+  readonly name = 'Local Whisper (STT)';
+  private options_: LocalWhisperProviderOptions;
+
+  constructor(options: LocalWhisperProviderOptions = {}) {
+    this.options_ = options;
+  }
+
+  async generate(
+    params: AiGenerationParams,
+    onProgress: (progress: number) => void,
+    signal?: AbortSignal
+  ): Promise<AiTaskResult> {
+    onProgress(0.1);
+
+    const isNode = typeof process !== 'undefined' && process.versions != null && process.versions.node != null;
+    if (!isNode) {
+      throw new Error('Local Whisper provider requires a Node.js / desktop runtime environment.');
+    }
+
+    const { execFile } = await import('node:child_process');
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const os = await import('node:os');
+
+    const tempDir = this.options_.tempDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'yave-whisper-')));
+    const audioFileName = params.audioFileName ? path.basename(params.audioFileName) : 'input_audio.wav';
+    const inputAudioPath = path.join(tempDir, audioFileName);
+
+    let audioBuffer: Buffer;
+    if (params.audioFile instanceof Uint8Array || params.audioFile instanceof ArrayBuffer) {
+      audioBuffer = Buffer.from(params.audioFile as any);
+    } else if (typeof Blob !== 'undefined' && params.audioFile instanceof Blob) {
+      const arrayBuf = await params.audioFile.arrayBuffer();
+      audioBuffer = Buffer.from(arrayBuf);
+    } else {
+      throw new Error('No audio file binary data provided for local Whisper transcription.');
+    }
+
+    await fs.writeFile(inputAudioPath, audioBuffer);
+    onProgress(0.3);
+
+    const model = params.modelId || this.options_.model || 'tiny';
+
+    // We execute python code that adds static_ffmpeg paths and runs whisper command or python whisper
+    const pythonScript = `
+import subprocess, sys
+
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
+
+cmd = [
+    "whisper",
+    sys.argv[1],
+    "--model", sys.argv[2],
+    "--output_format", "srt",
+    "--output_dir", sys.argv[3]
+]
+
+if len(sys.argv) > 4 and sys.argv[4] and sys.argv[4] != "auto":
+    cmd.extend(["--language", sys.argv[4]])
+
+if len(sys.argv) > 5 and sys.argv[5]:
+    cmd.extend(["--initial_prompt", sys.argv[5]])
+
+if len(sys.argv) > 6 and sys.argv[6]:
+    cmd.extend(["--device", sys.argv[6]])
+
+try:
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print("WHISPER_ERROR:", res.stderr or res.stdout, file=sys.stderr)
+        sys.exit(res.returncode)
+except FileNotFoundError:
+    print("WHISPER_ERROR: 'whisper' command not found. Please install openai-whisper.", file=sys.stderr)
+    sys.exit(127)
+`;
+
+    const scriptPath = path.join(tempDir, 'run_whisper.py');
+    await fs.writeFile(scriptPath, pythonScript, 'utf-8');
+
+    const pythonCmd = this.options_.pythonPath ?? 'python3';
+    const lang = params.language ?? '';
+    const prompt = (params.prompt && !params.prompt.startsWith('Transcribe ')) ? params.prompt : '';
+    const device = this.options_.device ?? '';
+
+    const args = [scriptPath, inputAudioPath, model, tempDir, lang, prompt, device];
+
+    onProgress(0.5);
+
+    await new Promise<void>((resolve, reject) => {
+      execFile(pythonCmd, args, { signal }, (error, stdout, stderr) => {
+        if (error) {
+          return reject(new Error(`Local Whisper execution failed: ${stderr || stdout || error.message}`));
+        }
+        resolve();
+      });
+    });
+
+    onProgress(0.85);
+
+    // Read generated SRT file
+    const audioNameNoExt = path.parse(audioFileName).name;
+    const srtPath = path.join(tempDir, `${audioNameNoExt}.srt`);
+
+    let srtContent = '';
+    try {
+      srtContent = await fs.readFile(srtPath, 'utf-8');
+    } catch {
+      // Fallback if named differently
+      const files = await fs.readdir(tempDir);
+      const srtFile = files.find((f) => f.endsWith('.srt'));
+      if (srtFile) {
+        srtContent = await fs.readFile(path.join(tempDir, srtFile), 'utf-8');
+      } else {
+        throw new Error('Local Whisper completed but no SRT output file was generated.');
+      }
+    }
+
+    // Clean up temporary files
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup error
+    }
+
+    onProgress(1.0);
+
+    return {
+      assetId: createUuid(),
+      mediaType: 'subtitle',
+      srtContent,
+    };
+  }
+}
+
 export class OpenAiWhisperProvider implements IGenerationProvider {
   readonly id = 'openai-whisper';
   readonly name = 'OpenAI Whisper (STT)';
@@ -231,6 +379,7 @@ export interface ImportAudioAndTranscribeOptions {
   prompt?: string;
   language?: string;
   providerId?: string;
+  modelId?: string;
   extraParams?: Record<string, any>;
   onProgress?: (progress: number) => void;
 }
@@ -253,6 +402,8 @@ export class AiOrchestrator {
   constructor(defaultProvider?: IGenerationProvider) {
     this.defaultProvider_ = defaultProvider ?? new MockGenerationProvider();
     this.registerProvider(this.defaultProvider_);
+    this.registerProvider(new LocalWhisperProvider());
+    this.registerProvider(new OpenAiWhisperProvider());
   }
 
   registerProvider(provider: IGenerationProvider): void {
@@ -471,6 +622,7 @@ export class AiOrchestrator {
       {
         kind: 'subtitle',
         prompt: options.prompt ?? `Transcribe ${audioName}`,
+        modelId: options.modelId,
         durationFrames: duration,
         audioAssetId: asset.id,
         audioFile: options.audioData,

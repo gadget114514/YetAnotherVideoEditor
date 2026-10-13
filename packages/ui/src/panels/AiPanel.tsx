@@ -10,6 +10,8 @@ export const AiPanel: React.FC = () => {
   const [progress, setProgress] = useState<number>(0);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [language, setLanguage] = useState<string>('ja');
+  const [providerId, setProviderId] = useState<string>('local-whisper');
+  const [modelId, setModelId] = useState<string>('tiny');
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
@@ -50,6 +52,8 @@ export const AiPanel: React.FC = () => {
         const result = await importAudioWithSubtitles(audioInput, {
           prompt: prompt.trim() || undefined,
           language,
+          providerId,
+          modelId,
           onProgress: (p) => {
             setProgress(Math.round(p * 100));
             setStatus(`AI transcription in progress... ${Math.round(p * 100)}%`);
@@ -208,6 +212,57 @@ export const AiPanel: React.FC = () => {
                 )}
               </div>
             </div>
+
+            <div>
+              <label style={{ display: 'block', color: '#a1a1aa', fontSize: '11px', marginBottom: '4px' }}>
+                STT Engine / Provider (STTプロバイダ)
+              </label>
+              <select
+                value={providerId}
+                onChange={(e) => setProviderId(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '5px 8px',
+                  backgroundColor: '#27272a',
+                  border: '1px solid #3f3f46',
+                  borderRadius: '4px',
+                  color: '#fff',
+                  fontSize: '11px',
+                }}
+              >
+                <option value="local-whisper">Local Whisper (ローカル環境)</option>
+                <option value="openai-whisper">OpenAI Whisper (API)</option>
+                <option value="mock-provider">Mock AI Provider (シミュレーション)</option>
+              </select>
+            </div>
+
+            {providerId === 'local-whisper' && (
+              <div>
+                <label style={{ display: 'block', color: '#a1a1aa', fontSize: '11px', marginBottom: '4px' }}>
+                  Whisper Model (モデル)
+                </label>
+                <select
+                  value={modelId}
+                  onChange={(e) => setModelId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '5px 8px',
+                    backgroundColor: '#27272a',
+                    border: '1px solid #3f3f46',
+                    borderRadius: '4px',
+                    color: '#fff',
+                    fontSize: '11px',
+                  }}
+                >
+                  <option value="tiny">tiny (軽量・高速)</option>
+                  <option value="base">base (標準)</option>
+                  <option value="small">small (高精度)</option>
+                  <option value="medium">medium (非常に高精度)</option>
+                  <option value="large">large (最高精度)</option>
+                  <option value="turbo">turbo (高速・高性能)</option>
+                </select>
+              </div>
+            )}
 
             <div>
               <label style={{ display: 'block', color: '#a1a1aa', fontSize: '11px', marginBottom: '4px' }}>
