@@ -55,6 +55,8 @@ export interface ProjectState {
     options?: {
       prompt?: string;
       language?: string;
+      providerId?: string;
+      modelId?: string;
       audioTrackId?: string;
       subtitleTrackId?: string;
       onProgress?: (progress: number) => void;
@@ -225,6 +227,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       subtitleTrackId: options.subtitleTrackId,
       prompt: options.prompt,
       language: options.language,
+      providerId: options.providerId,
+      modelId: options.modelId,
       onProgress: options.onProgress,
     });
 
