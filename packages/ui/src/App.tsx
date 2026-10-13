@@ -58,7 +58,7 @@ const defaultLayout: IJsonModel = {
             weight: 45,
             children: [
               { type: 'tab', name: 'Audio Mixer', component: 'audio-mixer' },
-              { type: 'tab', name: 'AI Panel', component: 'ai-panel' },
+              { type: 'tab', name: '字幕アシスタント', component: 'ai-panel' },
             ],
           },
         ],

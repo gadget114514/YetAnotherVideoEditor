@@ -4,8 +4,10 @@
   "private": true,
   "main": "./dist/main/main.js",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc && electron ."
+    "build:renderer": "pnpm --filter @yave/web exec vite build --base=./ --outDir ../electron/dist/renderer --emptyOutDir",
+    "build": "pnpm build:renderer && tsc",
+    "dev": "pnpm build && electron .",
+    "start": "tsc && electron ."
   },
   "dependencies": {
     "@yave/core": "workspace:*",

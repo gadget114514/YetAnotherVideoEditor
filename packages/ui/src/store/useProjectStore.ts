@@ -20,7 +20,8 @@ import {
   ImportAudioAndSubtitleCommand,
 } from '@yave/core';
 import { ProjectSerializer, type LoadResult, type SaveOptions } from '@yave/io';
-import { AiOrchestrator } from '@yave/engine';
+import { AiOrchestrator, LocalWhisperProvider, type LyricsAlignmentResult } from '@yave/engine';
+import { getWhisperBridge } from '@yave/platform';
 
 export interface ProjectState {
   project: Project;
@@ -54,7 +55,10 @@ export interface ProjectState {
     file: File | { name: string; buffer?: ArrayBuffer | Uint8Array; durationFrames?: number },
     options?: {
       prompt?: string;
+      /** Correct lyrics: recognised text is replaced by these lines, re-timed to the audio. */
+      lyrics?: string;
       language?: string;
+      providerId?: string;
       audioTrackId?: string;
       subtitleTrackId?: string;
       onProgress?: (progress: number) => void;
@@ -65,6 +69,7 @@ export interface ProjectState {
     audioTrack: Track;
     subtitleTrack: Track;
     srtContent: string;
+    lyricsAlignment?: LyricsAlignmentResult;
   }>;
 }
 
@@ -102,6 +107,24 @@ function makeInitialProject(): Project {
   s1.insertClip(sc);
 
   return p;
+}
+
+function createAiOrchestrator(): AiOrchestrator {
+  const orchestrator = new AiOrchestrator();
+  const bridge = getWhisperBridge();
+  if (bridge) orchestrator.registerProvider(new LocalWhisperProvider({ bridge }));
+  return orchestrator;
+}
+
+/** Uses the local Whisper runtime when the desktop host has it installed; otherwise the default provider. */
+async function defaultSttProviderId(): Promise<string | undefined> {
+  const bridge = getWhisperBridge();
+  if (!bridge) return undefined;
+  try {
+    return (await bridge.getStatus()).ready ? LocalWhisperProvider.ID : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -201,7 +224,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     executeCommand(new SetTrackPropertyCommand(project, trackId, prop, value));
   },
 
-  aiOrchestrator: new AiOrchestrator(),
+  aiOrchestrator: createAiOrchestrator(),
 
   importAudioWithSubtitles: async (file, options = {}) => {
     const { project, executeCommand, touch, aiOrchestrator } = get();
@@ -224,7 +247,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       audioTrackId: options.audioTrackId,
       subtitleTrackId: options.subtitleTrackId,
       prompt: options.prompt,
+      lyrics: options.lyrics,
       language: options.language,
+      providerId: options.providerId ?? (await defaultSttProviderId()),
       onProgress: options.onProgress,
     });
 
@@ -245,6 +270,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       audioTrack: res.audioTrack,
       subtitleTrack: res.subtitleTrack,
       srtContent: res.srtContent,
+      lyricsAlignment: res.lyricsAlignment,
     };
   },
 }));

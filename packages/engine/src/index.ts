@@ -26,6 +26,8 @@ export * from './subtitle/SubtitleRenderer.js';
 
 // AI
 export * from './ai/AiOrchestrator.js';
+export * from './ai/LocalWhisperProvider.js';
+export * from './ai/LyricsAligner.js';
 
 // Plugins
 export * from './plugins/PluginHost.js';

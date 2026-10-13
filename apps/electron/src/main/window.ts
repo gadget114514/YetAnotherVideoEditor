@@ -1,7 +1,7 @@
 import { BrowserWindow, session, shell } from 'electron';
 import path from 'path';
 
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(appOrigin?: string): BrowserWindow {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -25,13 +25,17 @@ export function createMainWindow(): BrowserWindow {
     },
   });
 
+  // Default: the bundled UI (dist/renderer) served by the loopback renderer server.
+  // Set YAVE_DEV_URL (e.g. http://localhost:5173/YetAnotherVideoEditor/) to use a running Vite dev server.
+  void win.loadURL(process.env.YAVE_DEV_URL ?? `${appOrigin}/index.html`);
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
   win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('http://localhost') && !url.startsWith('file://')) {
+    if (!url.startsWith('http://localhost') && !(appOrigin && url.startsWith(appOrigin))) {
       event.preventDefault();
     }
   });

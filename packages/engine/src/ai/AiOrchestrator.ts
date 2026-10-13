@@ -11,6 +11,7 @@ import {
   RoundMode,
 } from '@yave/core';
 import { SrtParser, convertCuesToClips } from '@yave/io';
+import { alignLyrics, type LyricsAlignmentResult } from './LyricsAligner.js';
 import { MediaProbe } from '../media/MediaProbe.js';
 
 export type GenerationKind = 'video' | 'audio' | 'subtitle' | 'image' | 'stt';
@@ -26,6 +27,8 @@ export interface AiGenerationParams {
   readonly audioFile?: File | Blob | ArrayBuffer | Uint8Array;
   readonly audioFileName?: string;
   readonly language?: string;
+  /** Correct lyrics (one subtitle per line). Recognised text is replaced by these lines, re-timed to the audio. */
+  readonly lyrics?: string;
   readonly extraParams?: Record<string, any>;
 }
 
@@ -44,6 +47,7 @@ export interface AiTaskRecord {
   outputAssetId?: Uuid;
   srtContent?: string;
   generatedClips?: SubtitleClip[];
+  lyricsAlignment?: LyricsAlignmentResult;
   error?: string;
 }
 
@@ -229,6 +233,8 @@ export interface ImportAudioAndTranscribeOptions {
   subtitleTrackId?: string;
   startFrame?: number;
   prompt?: string;
+  /** Correct lyrics; recognised subtitles are replaced by these lines with matched timing. */
+  lyrics?: string;
   language?: string;
   providerId?: string;
   extraParams?: Record<string, any>;
@@ -242,6 +248,7 @@ export interface ImportAudioAndTranscribeResult {
   subtitleTrack: Track;
   subtitleClips: SubtitleClip[];
   srtContent: string;
+  lyricsAlignment?: LyricsAlignmentResult;
   task: AiTaskRecord;
 }
 
@@ -351,6 +358,24 @@ export class AiOrchestrator {
       task.status = 'cached';
       task.outputAssetId = result.assetId;
       task.srtContent = result.srtContent;
+      if (task.params.lyrics && task.params.lyrics.trim() && (task.params.kind === 'subtitle' || task.params.kind === 'stt')) {
+        // Prefer token-level timing (forced alignment resolution); fall back to subtitle cues.
+        const tokens: Array<{ text: string; start: number; end: number }> = Array.isArray(result.data?.tokens)
+          ? result.data.tokens
+          : [];
+        const parsed = result.srtContent ? SrtParser.parseText(result.srtContent) : null;
+        const cues =
+          tokens.length > 0
+            ? tokens.map((t) => ({ startSeconds: t.start, endSeconds: t.end, text: t.text }))
+            : (parsed?.cues ?? []).map((c) => ({
+                startSeconds: c.startSeconds,
+                endSeconds: c.endSeconds,
+                text: c.rawText,
+              }));
+        const alignment = alignLyrics(cues, task.params.lyrics);
+        task.lyricsAlignment = alignment;
+        task.srtContent = alignment.srt;
+      }
       task.progress = 1.0;
 
       // Commit to real clip
@@ -470,12 +495,14 @@ export class AiOrchestrator {
     const task = await this.submitTask(
       {
         kind: 'subtitle',
-        prompt: options.prompt ?? `Transcribe ${audioName}`,
+        // Lyrics double as a vocabulary hint for the recogniser (Whisper prompts are short, so truncate).
+        prompt: options.prompt ?? (options.lyrics?.trim() ? options.lyrics.trim().slice(0, 180) : `Transcribe ${audioName}`),
         durationFrames: duration,
         audioAssetId: asset.id,
         audioFile: options.audioData,
         audioFileName: audioName,
         language: options.language,
+        lyrics: options.lyrics,
         providerId: options.providerId,
         extraParams: options.extraParams,
       },
@@ -494,6 +521,7 @@ export class AiOrchestrator {
       subtitleTrack,
       subtitleClips: task.generatedClips ?? [],
       srtContent: task.srtContent ?? '',
+      lyricsAlignment: task.lyricsAlignment,
       task,
     };
   }
