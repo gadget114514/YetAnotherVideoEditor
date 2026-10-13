@@ -197,10 +197,12 @@ export class LocalWhisperProvider implements IGenerationProvider {
 
     // We execute python code that adds static_ffmpeg paths and runs whisper command or python whisper
     const pythonScript = `
-import static_ffmpeg, subprocess, sys
+import subprocess, sys
+
 try:
+    import static_ffmpeg
     static_ffmpeg.add_paths()
-except Exception as e:
+except Exception:
     pass
 
 cmd = [
@@ -220,10 +222,14 @@ if len(sys.argv) > 5 and sys.argv[5]:
 if len(sys.argv) > 6 and sys.argv[6]:
     cmd.extend(["--device", sys.argv[6]])
 
-res = subprocess.run(cmd, capture_output=True, text=True)
-if res.returncode != 0:
-    print("WHISPER_ERROR:", res.stderr or res.stdout, file=sys.stderr)
-    sys.exit(res.returncode)
+try:
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print("WHISPER_ERROR:", res.stderr or res.stdout, file=sys.stderr)
+        sys.exit(res.returncode)
+except FileNotFoundError:
+    print("WHISPER_ERROR: 'whisper' command not found. Please install openai-whisper.", file=sys.stderr)
+    sys.exit(127)
 `;
 
     const scriptPath = path.join(tempDir, 'run_whisper.py');
